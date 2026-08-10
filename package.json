@@ -1,0 +1,47 @@
+{
+  "name": "billion-context-opencode",
+  "version": "0.1.0",
+  "description": "Independent ACP (Active Context Pruning) compression adapter for opencode. Model-driven context management via acp-kernel.",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20",
+    "opencode": ">=1.14.0"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "context",
+    "compression",
+    "acp"
+  ],
+  "license": "MIT",
+  "author": "ranxianglei",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ranxianglei/billion-context-opencode.git"
+  },
+  "homepage": "https://github.com/ranxianglei/billion-context-opencode#readme",
+  "bugs": {
+    "url": "https://github.com/ranxianglei/billion-context-opencode/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "acp-kernel": "0.0.17",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.1",
+    "typescript": "^5.7.0",
+    "zod": "^4.0.0"
+  }
+}
