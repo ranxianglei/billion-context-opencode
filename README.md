@@ -15,12 +15,16 @@ Independent implementation (modeled after `billion-context-pi`, the Pi adapter).
 
 Each message is tagged with an `<acp tokens="X" type="Y">mNNNNN</acp>` ref. Pass the `mNNNNN` ref as `startId`/`endId` to `bili_compress`.
 
-## Install (local development)
+## Install
 
-```bash
-git clone <repo> && cd billion-context-opencode
-npm install
-npm run build        # produces dist/index.js (self-contained, acp-kernel + zod inlined)
+Published on npm as [`billion-context-opencode`](https://www.npmjs.com/package/billion-context-opencode) — opencode installs it on demand, no path needed:
+
+```jsonc
+// opencode.json
+{
+  "compaction": { "auto": false },
+  "plugin": ["billion-context-opencode"]
+}
 ```
 
 ## Clean test environment
@@ -28,21 +32,11 @@ npm run build        # produces dist/index.js (self-contained, acp-kernel + zod 
 A clean opencode instance that loads **only** this plugin (no pollution from other compression plugins) via an isolated `XDG_CONFIG_HOME`:
 
 ```bash
-./test-clean/run.sh
+./test-clean/run.sh                         # npm version (default)
+PLUGIN=$PWD/../dist/index.js ./test-clean/run.sh   # local build instead
 ```
 
 This disables opencode's built-in compaction and registers only the four `bili_` tools.
-
-## Use in your own opencode config
-
-Add to `opencode.json`:
-
-```jsonc
-{
-  "compaction": { "auto": false },
-  "plugin": ["/path/to/billion-context-opencode/dist/index.js"]
-}
-```
 
 ## Plugin options
 
@@ -50,7 +44,7 @@ Add to `opencode.json`:
 {
   "plugin": [
     {
-      "id": "/path/to/billion-context-opencode/dist/index.js",
+      "id": "billion-context-opencode",
       "options": {
         "modelContextLimit": 200000,
         "preserveRecentMessages": 5,

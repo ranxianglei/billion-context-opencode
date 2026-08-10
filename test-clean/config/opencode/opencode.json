@@ -1,9 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "compaction": {
-    "auto": false
-  },
-  "plugin": [
-    "/absolute/path/to/billion-context-opencode/dist/index.js"
-  ]
+  "compaction": { "auto": false },
+  "plugin": ["billion-context-opencode"]
 }
