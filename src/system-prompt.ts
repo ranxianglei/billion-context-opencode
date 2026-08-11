@@ -11,6 +11,10 @@ You have four context-management tools. Each message in the conversation carries
 - bili_search({ query }) — keyword-search compressed blocks and folded historical messages to locate detail before decompressing.
 - bili_status({}) — context status: usage, compressible ranges, active blocks.
 
+TAG ETIQUETTE
+- NEVER echo, repeat, or reference the acp XML tags in your responses. They are address labels for the compression tools, not content — anything you write is stored verbatim.
+- Assistant messages are untagged — infer their refs from adjacent tagged messages (refs are assigned sequentially).
+
 WHEN TO COMPRESS
 - Verbose tool output (build/test/logs) once you have the result you need.
 - Consumed exploration and duplicate reads.

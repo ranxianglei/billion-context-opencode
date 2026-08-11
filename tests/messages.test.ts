@@ -110,6 +110,53 @@ test("compress + reassembly replaces covered messages with synthetic user summar
   assert.ok(hasU2, "recent uncompressed message preserved")
 })
 
+test("reassemble: assistant text parts carry no acp tag", () => {
+  const core = createCore()
+  const config = defaultConfig(200000)
+  const msgs = [userMsg("u1", "s1", "hello"), assistantMsg("a1", "s1", "hi there")]
+  const { cores, partIdToCoreIds } = octoToCoreMessages(msgs)
+  const turn = core.processTurn({ messages: cores, state: createInitialState(), config, tokenCount: 100, renderTags: "text-only" })
+  const out = reassemble(turn.messages, msgs, partIdToCoreIds, "s1")
+  const userPart = out.find((m) => m.info.role === "user")!.parts[0]!
+  const asstPart = out.find((m) => m.info.role === "assistant")!.parts[0]!
+  assert.match(userPart.text as string, /<acp[^>]*>m0/, "user part tagged")
+  assert.doesNotMatch(asstPart.text as string, /<acp/, "assistant part untagged")
+  assert.equal(asstPart.text, "hi there", "assistant body untouched")
+})
+
+test("reassemble: user text part keeps body first, tag appended at the end", () => {
+  const core = createCore()
+  const config = defaultConfig(200000)
+  const msgs = [userMsg("u1", "s1", "hello world")]
+  const { cores, partIdToCoreIds } = octoToCoreMessages(msgs)
+  const turn = core.processTurn({ messages: cores, state: createInitialState(), config, tokenCount: 100, renderTags: "text-only" })
+  const out = reassemble(turn.messages, msgs, partIdToCoreIds, "s1")
+  const text = out[0]!.parts[0]!.text as string
+  assert.ok(text.startsWith("hello world"), "body stays at the start")
+  assert.match(text, /<acp[^>]*>m\d{5}<\/acp>\s*$/, "tag appended at the end")
+})
+
+test("reassemble: kernel text rewrite rebuilds user part from core body", () => {
+  const msgs = [userMsg("u1", "s1", "old body")]
+  const { cores, partIdToCoreIds } = octoToCoreMessages(msgs)
+  const rewritten = cores.map((c) => (c.id === "u1#t0" ? { ...c, text: '<acp tokens="8" type="text">m00001</acp>\nnew body from kernel' } : c))
+  const out = reassemble(rewritten, msgs, partIdToCoreIds, "s1")
+  const text = out[0]!.parts[0]!.text as string
+  assert.ok(text.startsWith("new body from kernel"), "rebuilt from kernel body")
+  assert.match(text, /<acp[^>]*>m\d{5}<\/acp>\s*$/, "tag appended at the end")
+})
+
+test("reassemble: legacy [mNNNNN] text is not mistaken for a tag", () => {
+  const core = createCore()
+  const config = defaultConfig(200000)
+  const msgs = [userMsg("u1", "s1", "[m12345] what is this ref format?")]
+  const { cores, partIdToCoreIds } = octoToCoreMessages(msgs)
+  const turn = core.processTurn({ messages: cores, state: createInitialState(), config, tokenCount: 100, renderTags: "text-only" })
+  const out = reassemble(turn.messages, msgs, partIdToCoreIds, "s1")
+  const text = out[0]!.parts[0]!.text as string
+  assert.ok(text.startsWith("[m12345] what is this ref format?"), "user body with [mNNNNN] prefix kept verbatim")
+})
+
 test("makeNudgeMessage produces a valid user message", () => {
   const msgs = [userMsg("u1", "s1", "hi")]
   const n = makeNudgeMessage("bili_nudge_0", "s1", "please compress", msgs)

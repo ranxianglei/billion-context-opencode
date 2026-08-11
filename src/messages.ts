@@ -1,6 +1,10 @@
 import type { CoreMessage } from "acp-kernel"
 import { debug, warn } from "./log.js"
 
+// Leading <acp ...>mNNNNN</acp> tag. XML only — the legacy [mNNNNN] form
+// never existed here and matching it would strip user text like "[m12345] ...".
+const REF_TAG = new RegExp("^(?:\\x3cacp\\s[^>]*\\x3em\\d{5}\\x3c/acp\\x3e)\\s?\\n?")
+
 export interface OctoPart {
   id: string
   type: string
@@ -183,7 +187,11 @@ export function reassemble(
       if (!survived) continue
       if (p.type === "text") {
         const tagged = outCoreById.get(ids[0]!)
-        parts.push({ ...p, text: tagged?.text ?? p.text })
+        if (tagged?.text) {
+          parts.push(patchRefTag(p, tagged, orig.info.role))
+        } else {
+          parts.push(p)
+        }
       } else {
         parts.push(p)
       }
@@ -192,6 +200,41 @@ export function reassemble(
   }
 
   return result
+}
+
+function trimEnd(s: string): string {
+  return s.replace(/\s+$/, "")
+}
+
+export function peelRefTagText(text: string): string {
+  return text.replace(REF_TAG, "")
+}
+
+export function rebuildBodyFromCore(part: OctoPart, coreBody: string, tag: string): OctoPart {
+  return { ...part, text: `${coreBody.replace(/\s+$/, "")}\n\n${tag}` }
+}
+
+export function patchRefTag(part: OctoPart, core: CoreMessage, role: string): OctoPart {
+  const match = core.text ? core.text.match(REF_TAG) : null
+  const tag = match ? match[0] : null
+  if (!tag) return part
+  // Skip tag injection for assistant messages — the model sees tags on its own
+  // previous responses and echoes them, causing visible tag fragments in the terminal.
+  // The model can still reference assistant messages by inferring refs from context.
+  if (role === "assistant") return part
+  // Honor kernel body mutations (emergency truncation of large tool-results,
+  // future rewrites): if core.text's body differs from the original text,
+  // rebuild from the kernel body — otherwise truncation never reaches the model.
+  const tagCore = tag.replace(/\s+$/, "")
+  let bodyStart = tagCore.length
+  if (core.text!.charAt(bodyStart) === "\n") bodyStart += 1
+  const coreBody = core.text!.slice(bodyStart)
+  const originalBody = peelRefTagText(part.text ?? "")
+  if (coreBody && trimEnd(coreBody) !== trimEnd(originalBody)) {
+    return rebuildBodyFromCore(part, coreBody, tag)
+  }
+  const baseText = originalBody.replace(/\n*$/, "")
+  return { ...part, text: baseText.length > 0 ? `${baseText}\n\n${tag}` : tag }
 }
 
 export function makeNudgeMessage(
