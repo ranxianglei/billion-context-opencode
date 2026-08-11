@@ -176,7 +176,10 @@ export function reassemble(
         const callAlive = outCoreById.has(ids[0]!)
         const resultAlive = outCoreById.has(ids[1]!)
         if (!(callAlive && resultAlive)) continue
-        parts.push(p)
+        // Honor kernel body mutations (emergency truncation of large
+        // tool-results): if the result core's text differs from the original
+        // output, replace it — otherwise truncation never reaches the model.
+        parts.push(applyToolBody(p, outCoreById.get(ids[1]!)))
         continue
       }
       const survived = ids.some((id) => outCoreById.has(id))
@@ -192,6 +195,27 @@ export function reassemble(
   }
 
   return result
+}
+
+function trimEnd(s: string): string {
+  return s.replace(/\s+$/, "")
+}
+
+export function applyToolBody(part: OctoPart, resultCore: CoreMessage | undefined): OctoPart {
+  const coreBody = resultCore?.text ?? ""
+  if (!coreBody) return part
+  // Compare the original output against the result core's text — kernel
+  // truncation rewrites that text, and dropping the rewrite would leave the
+  // full output in the request.
+  const state = part.state
+  const originalText =
+    state?.status === "completed"
+      ? typeof state.output === "string"
+        ? state.output
+        : safeStringify(state.output)
+      : `Error: ${state?.error ?? ""}`
+  if (trimEnd(coreBody) === trimEnd(originalText)) return part
+  return { ...part, state: { status: "completed", ...state, output: coreBody } }
 }
 
 export function makeNudgeMessage(

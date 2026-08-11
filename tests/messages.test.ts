@@ -110,6 +110,23 @@ test("compress + reassembly replaces covered messages with synthetic user summar
   assert.ok(hasU2, "recent uncompressed message preserved")
 })
 
+test("reassemble: kernel-truncated tool body replaces part output", () => {
+  const msgs = [toolMsg("a2", "s1", "bash", "call_1", "ORIGINAL_LONG_OUTPUT")]
+  const { cores, partIdToCoreIds } = octoToCoreMessages(msgs)
+  const truncated = cores.map((c) => (c.id === "a2#x0" ? { ...c, text: "TRUNCATED_BODY" } : c))
+  const out = reassemble(truncated, msgs, partIdToCoreIds, "s1")
+  assert.equal(out.length, 1)
+  assert.equal(out[0]!.parts[0]!.state!.output, "TRUNCATED_BODY", "truncated body applied to part output")
+})
+
+test("reassemble: trailing whitespace difference is not treated as a rewrite", () => {
+  const msgs = [toolMsg("a2", "s1", "bash", "call_1", "done")]
+  const { cores, partIdToCoreIds } = octoToCoreMessages(msgs)
+  const padded = cores.map((c) => (c.id === "a2#x0" ? { ...c, text: "done\n\n  " } : c))
+  const out = reassemble(padded, msgs, partIdToCoreIds, "s1")
+  assert.equal(out[0]!.parts[0]!.state!.output, "done", "original output kept")
+})
+
 test("makeNudgeMessage produces a valid user message", () => {
   const msgs = [userMsg("u1", "s1", "hi")]
   const n = makeNudgeMessage("bili_nudge_0", "s1", "please compress", msgs)
