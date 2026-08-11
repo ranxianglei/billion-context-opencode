@@ -140,6 +140,11 @@ async function runPipeline(
     debug("nudge-injected", { sid: sessionID, tier: turn.nudge.tier, reason: turn.nudge.reason })
   }
 
+  // opencode calls this hook with a bare wrapper `{ messages: msgs }` and
+  // ignores the returned/assigned value. Reassigning `output.messages` alone
+  // (a new array) is invisible to the caller, so the request is never shrunk.
+  // Rebuild the *same* array in place instead.
+  msgs.splice(0, msgs.length, ...reassembled)
   output.messages = reassembled
   debug("transform-out", { sid: sessionID, outMsgs: reassembled.length, nudge: !!turn.nudge?.shouldInject })
 }
