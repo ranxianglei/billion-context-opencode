@@ -2,7 +2,7 @@ import { COMPRESS_PHILOSOPHY } from "acp-kernel"
 
 export const SYSTEM_PROMPT = `${COMPRESS_PHILOSOPHY}
 
-ACP TOOLS (billion-context)
+BILI CONTEXT MANAGEMENT (billion-context)
 
 You have four context-management tools. Each message in the conversation carries an acp tag like \`<acp tokens="2" type="text">m00001</acp>\` showing its ref (mNNNNN), approximate token size, and content type. Use these refs to compress ranges.
 

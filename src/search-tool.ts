@@ -1,16 +1,20 @@
-import { z } from "zod"
 import { searchBlocks } from "acp-kernel"
 import type { AcpRuntime } from "./runtime.js"
-import type { ToolDef } from "./compress-tool.js"
+import type { V2ToolInfo, V2ToolContext } from "./compress-tool.js"
 import { buildSearchDocs } from "./search-index.js"
 
-export function makeSearchTool(runtime: AcpRuntime): ToolDef {
+export function makeSearchTool(runtime: AcpRuntime): V2ToolInfo {
   return {
+    name: "bili_search",
     description:
       "Search compressed blocks AND historical messages by keyword. Use to cheaply locate detail before decompressing. Returns ranked results with ref, size, preview, and the bili_decompress command to retrieve full content.",
-    args: {
-      query: z.string().describe("Keywords to locate detail folded into compressed summaries or historical messages."),
-      limit: z.number().optional().describe("Max results (default 10)."),
+    input: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Keywords to locate detail folded into compressed summaries or historical messages." },
+        limit: { type: "number", description: "Max results (default 10)." },
+      },
+      required: ["query"],
     },
     async execute(args, ctx) {
       return runtime.acquireLock(ctx.sessionID, () => handleSearch(args, runtime, ctx))
@@ -18,22 +22,23 @@ export function makeSearchTool(runtime: AcpRuntime): ToolDef {
   }
 }
 
-async function handleSearch(args: Record<string, unknown>, runtime: AcpRuntime, ctx: { sessionID: string }): Promise<string> {
+async function handleSearch(args: Record<string, unknown>, runtime: AcpRuntime, ctx: V2ToolContext): Promise<{ content: string }> {
   const state = await runtime.stateFor(ctx.sessionID)
   const cores = runtime.getCores(ctx.sessionID) ?? []
   const docs = buildSearchDocs(state, cores)
   const msgCount = docs.filter((d) => d.kind === "message").length
   const blockCount = docs.filter((d) => d.kind === "block").length
-  const query = String(args.query)
-  const results = searchBlocks(docs, query, { limit: args.limit as number | undefined })
+  const query = String(args.query ?? "")
+  if (!query) return { content: "Error: query is required." }
+  const results = searchBlocks(docs, query, { limit: typeof args.limit === "number" ? args.limit : undefined })
 
   if (results.length === 0) {
-    return `No matches for "${query}" across ${state.blocks.length} block(s) and ${msgCount} historical message(s).`
+    return { content: `No matches for "${query}" across ${state.blocks.length} block(s) and ${msgCount} historical message(s).` }
   }
 
   const lines = [`Found ${results.length} match(es) for "${query}" (searched ${blockCount} blocks + ${msgCount} messages):`]
   for (const r of results) lines.push("", formatResult(r))
-  return lines.join("\n")
+  return { content: lines.join("\n") }
 }
 
 function formatResult(r: ReturnType<typeof searchBlocks>[number]): string {

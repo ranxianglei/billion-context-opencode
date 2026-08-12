@@ -1,85 +1,215 @@
 import assert from "node:assert/strict"
 import { rm } from "node:fs/promises"
-import plugin from "./dist/index.js"
+import * as path from "node:path"
+import * as os from "node:os"
+import { fileURLToPath } from "node:url"
 
-await rm(process.env.HOME + "/.cache/opencode-bili-acp", { recursive: true, force: true })
+const here = path.dirname(fileURLToPath(import.meta.url))
+const stateDir = path.join(here, ".test-clean", "smoke-state")
+process.env.BILI_ACP_STATE_DIR = stateDir
+await rm(stateDir, { recursive: true, force: true })
+
 const sid = "smoke-" + Date.now()
-const now = Date.now()
 
 function userMsg(id, text) {
-  return {
-    info: { id, sessionID: sid, role: "user", time: { created: now }, agent: "build", model: { providerID: "x", modelID: "y" } },
-    parts: [{ id: `${id}_p`, sid, messageID: id, type: "text", text }],
-  }
+  return { id, role: "user", content: [{ type: "text", text }] }
 }
 function assistantMsg(id, text) {
-  return {
-    info: { id, sessionID: sid, role: "assistant", time: { created: now }, parentID: "p", modelID: "y", providerID: "x", mode: "default", path: { cwd: "/", root: "/" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
-    parts: [{ id: `${id}_p`, sid, messageID: id, type: "text", text }],
-  }
+  return { id, role: "assistant", content: [{ type: "text", text }] }
 }
 
-const hooks = await plugin({ project: { id: "t", name: "t" }, directory: "/tmp" }, {})
+const tools = []
+let contextHook = null
+const ctx = {
+  options: { preserveRecentMessages: 1, coreOverrides: { preserveRecentTokens: 0 } },
+  tool: {
+    transform: async (cb) => {
+      cb({ add: (tool) => tools.push(tool) })
+      return { dispose: async () => {} }
+    },
+  },
+  session: {
+    hook: async (name, cb) => {
+      if (name === "context") contextHook = cb
+      return { dispose: async () => {} }
+    },
+  },
+  catalog: {
+    model: { list: async () => ({ data: [{ id: "test-model", providerID: "test", limit: { context: 200000 } }] }) },
+  },
+}
 
-// --- system.transform: captures model, injects prompt ---
-const sysOut = { system: [] }
-await hooks["experimental.chat.system.transform"]({ sessionID: sid, model: { limit: { context: 200000, output: 8000 } } }, sysOut)
-assert.ok(sysOut.system.length > 0, "system prompt injected")
-console.log("✓ system.transform injected", sysOut.system.length, "block(s)")
+const plugin = (await import("./dist/index.js")).default
+await plugin.setup(ctx)
+assert.equal(plugin.id, "billion-context-opencode-v2")
+console.log("✓ plugin loaded:", plugin.id)
 
-// --- build a conversation with large old content ---
-const u1 = userMsg("u1", "first user turn about topic A. " + "alpha ".repeat(1200))
-const a1 = assistantMsg("a1", "assistant reply about A. " + "beta ".repeat(1200))
-const u2 = userMsg("u2", "second user turn about topic B. " + "gamma ".repeat(1200))
-const a2 = assistantMsg("a2", "assistant reply about B. " + "delta ".repeat(1200))
-const u3 = userMsg("u3", "third turn about C. " + "epsilon ".repeat(600))
-const a3 = assistantMsg("a3", "reply about C. " + "zeta ".repeat(600))
-const u4 = userMsg("u4", "fourth turn about D. " + "eta ".repeat(600))
-const a4 = assistantMsg("a4", "reply about D. " + "theta ".repeat(600))
-const u5 = userMsg("u5", "recent question: what is the status?")
+const names = tools.map((t) => t.name)
+assert.deepEqual(names, ["bili_compress", "bili_decompress", "bili_search", "bili_status"])
+console.log("✓ tools registered:", names.join(", "))
 
-// --- messages.transform: runs pipeline, tags messages ---
-const mout = { messages: [u1, a1, u2, a2, u3, a3, u4, a4, u5] }
-await hooks["experimental.chat.messages.transform"]({}, mout)
-console.log("✓ messages.transform ran, output msgs:", mout.messages.length)
-const tagged = mout.messages.some((m) => m.parts.some((p) => p.text && p.text.includes("<acp ")))
-console.log("  ref tags injected:", tagged)
+async function runHook(messages, model, session = sid) {
+  const event = { sessionID: session, model, system: [], messages, tools: {} }
+  await contextHook(event)
+  return event
+}
 
 function extractRef(msg) {
-  for (const p of msg.parts) {
-    if (!p.text) continue
+  for (const p of msg.content || []) {
+    if (p.type !== "text" || typeof p.text !== "string") continue
     const m = String(p.text).match(/<acp [^>]*>(m\d+)<\/acp>/)
     if (m) return m[1]
   }
   return null
 }
-const u1Ref = extractRef(mout.messages[0])
-const a1Ref = extractRef(mout.messages[1])
-console.log("  u1 ref:", u1Ref, "| a1 ref:", a1Ref)
-assert.ok(u1Ref && a1Ref, "refs extractable from tags")
 
-// --- bili_status tool ---
-const statusResult = await hooks.tool.bili_status.execute({}, { sessionID: sid, messageID: "m_status", callID: "call_status", agent: "build", directory: "/tmp", abort: new AbortController().signal, metadata: () => {}, ask: async () => ({}) })
-console.log("✓ bili_status returned", typeof statusResult === "string" ? statusResult.slice(0, 80) + "..." : "object")
+function textOf(msg) {
+  return (msg.content || []).filter((p) => p.type === "text").map((p) => p.text).join("\n")
+}
 
-// --- bili_compress tool: compress u1..a1 (large) ---
-const compressResult = await hooks.tool.bili_compress.execute({
-  content: [{ startId: u1Ref, endId: a1Ref, summary: "User and assistant discussed topic A in detail, covering alpha concepts and beta implementations across many repetitions for testing the compression pipeline end to end." }],
-}, { sessionID: sid, messageID: "m_compress", callID: "call_compress", agent: "build", directory: "/tmp", abort: new AbortController().signal, metadata: () => {}, ask: async () => ({}) })
-console.log("✓ bili_compress:", compressResult.slice(0, 100))
+function toolParts(msgs, type) {
+  const out = []
+  for (const m of msgs) {
+    for (const p of m.content || []) {
+      if (p.type === type) out.push(p)
+    }
+  }
+  return out
+}
 
-// --- messages.transform again: should show pruned + summary ---
-const mout2 = { messages: [u1, a1, u2, a2, u3, a3, u4, a4, u5] }
-await hooks["experimental.chat.messages.transform"]({}, mout2)
-const hasSummary = mout2.messages.some((m) => m.parts.some((p) => p.text && p.text.includes("[Compressed conversation section]")))
-console.log("✓ after compress, summary present:", hasSummary, "| msgs:", mout2.messages.length)
+function assertBalanced(msgs, label) {
+  const calls = toolParts(msgs, "tool-call")
+  const results = toolParts(msgs, "tool-result")
+  const callIds = calls.map((p) => p.id)
+  const resultIds = results.map((p) => p.id)
+  assert.deepEqual([...callIds].sort(), [...resultIds].sort(), `${label}: every tool call has its matching result`)
+  return { calls, results }
+}
 
-// --- bili_search tool ---
-const searchResult = await hooks.tool.bili_search.execute({ query: "topic A alpha beta" }, { sessionID: sid, messageID: "m_search", callID: "call_search", agent: "build", directory: "/tmp", abort: new AbortController().signal, metadata: () => {}, ask: async () => ({}) })
-console.log("✓ bili_search:", searchResult.slice(0, 100))
+// --- build a long conversation ---
+const u1 = userMsg("msg_u1", "first user turn about topic A. " + "alpha ".repeat(1200))
+const a1 = assistantMsg("msg_a1", "assistant reply about A. " + "beta ".repeat(1200))
+const u2 = userMsg("msg_u2", "second user turn about topic B. " + "gamma ".repeat(1200))
+const a2 = assistantMsg("msg_a2", "assistant reply about B. " + "delta ".repeat(1200))
+const u3 = userMsg("msg_u3", "recent question: what is the status?")
 
-// --- bili_decompress tool ---
-const decompResult = await hooks.tool.bili_decompress.execute({ blockId: "b1", inline: true }, { sessionID: sid, messageID: "m_decomp", callID: "call_decomp", agent: "build", directory: "/tmp", abort: new AbortController().signal, metadata: () => {}, ask: async () => ({}) })
-console.log("✓ bili_decompress:", decompResult.slice(0, 100))
+// --- first dispatch: tags injected, system prompt upserted ---
+const ev1 = await runHook([u1, a1, u2, a2, u3], { id: "test-model", providerID: "test" })
+console.log("✓ context hook ran, messages:", ev1.messages.length)
+const systemText = ev1.system.map((p) => p.text).join("\n")
+assert.ok(systemText.includes("BILI CONTEXT MANAGEMENT"), "system prompt injected")
+assert.ok(ev1.messages.every((m) => m.content && m.content.length > 0), "all messages kept on first pass")
+
+const u1Ref = extractRef(ev1.messages[0])
+const a1Ref = extractRef(ev1.messages[1])
+const u2Ref = extractRef(ev1.messages[2])
+const a2Ref = extractRef(ev1.messages[3])
+assert.ok(u1Ref && u2Ref && a2Ref, "refs extractable from tags")
+console.log("  refs:", [u1Ref, a1Ref, u2Ref, a2Ref].join(", "), "| system marker present")
+
+// --- second dispatch must be idempotent (no duplicate tags) ---
+const ev2 = await runHook([u1, a1, u2, a2, u3], { id: "test-model", providerID: "test" })
+const tagCount = (textOf(ev2.messages[0]).match(/<acp/g) || []).length
+assert.equal(tagCount, 1, "exactly one tag per text part")
+console.log("✓ idempotent across dispatches")
+
+// --- bili_status ---
+const statusTool = tools.find((t) => t.name === "bili_status")
+const statusResult = await statusTool.execute({}, { sessionID: sid })
+const fullContent = typeof statusResult.content === "string" ? statusResult.content : String(statusResult.content);
+console.log("✓ bili_status: FULL:", fullContent);
+console.log("✓ bili_status: LEN:", fullContent.length, "CHARS");
+
+// --- bili_compress: compress u2..a2 (the first user message is the opener
+//    and is always preserved by the kernel, so compress a later range) ---
+const compressTool = tools.find((t) => t.name === "bili_compress")
+const compressResult = await compressTool.execute(
+  {
+    content: [
+      { startId: u2Ref, endId: a2Ref, summary: "User and assistant discussed topic B covering gamma concepts and delta implementations in depth for testing the compression pipeline end to end.", topic: "smoke-b" },
+    ],
+  },
+  { sessionID: sid },
+)
+console.log("✓ bili_compress:", (compressResult.content || "").slice(0, 100).replace(/\n/g, " | "))
+
+// --- third dispatch: covered messages pruned, summary placeholder injected ---
+const ev3 = await runHook([u1, a1, u2, a2, u3], { id: "test-model", providerID: "test" })
+const allText = ev3.messages.map(textOf).join("\n")
+assert.ok(allText.includes("[Compressed conversation section]"), "summary placeholder present")
+assert.ok(!allText.includes("gamma gamma"), "covered old content pruned")
+assert.ok(!allText.includes("delta delta"), "covered assistant content pruned")
+assert.ok(allText.includes("alpha alpha"), "uncovered opener content preserved")
+assert.ok(allText.includes("recent question"), "recent message preserved")
+console.log("✓ after compress: summary present, old content pruned, msgs:", ev3.messages.length)
+
+// --- bili_search ---
+const searchTool = tools.find((t) => t.name === "bili_search")
+const searchResult = await searchTool.execute({ query: "topic A alpha beta" }, { sessionID: sid })
+assert.match(searchResult.content, /b1|block/, "search finds the compressed block")
+console.log("✓ bili_search:", (searchResult.content || "").slice(0, 100).replace(/\n/g, " | "))
+
+// --- bili_decompress ---
+const decompressTool = tools.find((t) => t.name === "bili_decompress")
+const decompResult = await decompressTool.execute({ blockId: "b1", inline: true }, { sessionID: sid })
+assert.ok((decompResult.content || "").includes("topic B"), "decompress restores original content")
+console.log("✓ bili_decompress:", (decompResult.content || "").slice(0, 90).replace(/\n/g, " | "))
+
+// --- pairing regression: consumed bili_compress invocations must be hidden ---
+// Guards the compressToolName fix (acp-kernel #9666436). With the kernel
+// hardcoded to 'compress', a bili_compress call+result whose block has been
+// consumed leaks into provider history — the provider then rejects the
+// orphaned pair ('assistant tool calls must be followed by matching tool
+// results'). The pair must be hidden (or kept) atomically.
+const psid = sid + "-pair"
+const pu1 = userMsg("msg_pu1", "pair opener about X. " + "aaa ".repeat(800))
+const pa1 = assistantMsg("msg_pa1", "pair reply about X. " + "bbb ".repeat(800))
+const pu2 = userMsg("msg_pu2", "pair topic Y. " + "ccc ".repeat(800))
+const pa2 = assistantMsg("msg_pa2", "pair reply about Y. " + "ddd ".repeat(800))
+const pu3 = userMsg("msg_pu3", "pair recent question: status?")
+
+const pev1 = await runHook([pu1, pa1, pu2, pa2, pu3], { id: "test-model", providerID: "test" }, psid)
+const pu2Ref = extractRef(pev1.messages[2])
+const pa2Ref = extractRef(pev1.messages[3])
+assert.ok(pu2Ref && pa2Ref, "pair session refs injected")
+
+const pairCallId = "call-pair-1"
+const pairSummary = "Pair session: user and assistant discussed topic Y (ccc/ddd) end to end for the pairing regression test."
+await compressTool.execute(
+  { content: [{ startId: pu2Ref, endId: pa2Ref, summary: pairSummary, topic: "pair" }] },
+  { sessionID: psid, id: pairCallId },
+)
+
+const callMsg = {
+  id: "msg_assistant_call",
+  role: "assistant",
+  content: [{ type: "tool-call", id: pairCallId, name: "bili_compress", input: { content: [{ startId: pu2Ref, endId: pa2Ref, summary: pairSummary, topic: "pair" }] } }],
+}
+const resultMsg = {
+  id: "msg_tool_result",
+  role: "tool",
+  content: [{ type: "tool-result", id: pairCallId, name: "bili_compress", result: { type: "json", value: { blocks: 1 } } }],
+}
+const pairHistory = [pu1, pa1, pu2, pa2, callMsg, resultMsg, pu3]
+
+// Block still active -> the compress invocation stays visible, as a complete pair.
+const pev2 = await runHook(pairHistory, { id: "test-model", providerID: "test" }, psid)
+const pair2 = assertBalanced(pev2.messages, "ev2")
+assert.equal(pair2.calls.filter((p) => p.id === pairCallId).length, 1, "active compress call stays visible")
+assert.equal(pair2.results.filter((p) => p.id === pairCallId).length, 1, "active compress result stays visible")
+assert.ok(pev2.messages.map(textOf).join("\n").includes("[Compressed conversation section]"), "pair ev2 summary present")
+
+// Consume the tier-1 block into a tier-2 block -> the invocation is now
+// consumed and must be hidden (call AND result together, never one alone).
+await compressTool.execute(
+  { content: [{ startId: "b1", endId: "b1", summary: "Distilled pair topic Y further into tier 2 for the pairing regression test, keeping ccc and ddd essence.", topic: "pair-tier2" }] },
+  { sessionID: psid, id: "call-pair-2" },
+)
+const pev3 = await runHook(pairHistory, { id: "test-model", providerID: "test" }, psid)
+const pair3 = assertBalanced(pev3.messages, "ev3")
+assert.equal(pair3.calls.filter((p) => p.id === pairCallId).length, 0, "consumed compress call hidden")
+assert.equal(pair3.results.filter((p) => p.id === pairCallId).length, 0, "consumed compress result hidden")
+assert.ok(pev3.messages.map(textOf).join("\n").includes("[Compressed conversation section]"), "pair ev3 summary present")
+console.log("✓ pairing: consumed bili_compress invocation hidden as call+result pair")
 
 console.log("\n=== ALL SMOKE TESTS PASSED ===")

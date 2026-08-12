@@ -3,7 +3,7 @@ import * as path from "node:path"
 import * as os from "node:os"
 import { createInitialState, type CompressionState } from "acp-kernel"
 
-const STATE_DIR = path.join(os.homedir(), ".cache", "opencode-bili-acp")
+const STATE_DIR = process.env.BILI_ACP_STATE_DIR || path.join(os.homedir(), ".cache", "opencode-bili-acp")
 
 function stateFileFor(sessionId: string): string {
   return path.join(STATE_DIR, `${sessionId}.acp.json`)

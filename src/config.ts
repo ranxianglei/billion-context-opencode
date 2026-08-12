@@ -44,6 +44,11 @@ export function resolveConfig(
     protectedTools,
     preserveRecentMessages,
     ...adapter.coreOverrides,
+    // The compression tool is registered as bili_compress. The kernel must
+    // recognize it (configurable compressToolName, rorshopping/acp-kernel
+    // #9666436) so consumed invocations are hidden as call+result pairs
+    // instead of leaking orphaned tool messages into provider history.
+    compressToolName: "bili_compress",
   })
 
   return {

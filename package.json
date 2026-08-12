@@ -1,32 +1,37 @@
 {
-  "name": "billion-context-opencode",
+  "name": "billion-context-opencode-v2",
   "version": "0.1.0",
-  "description": "Independent ACP (Active Context Pruning) compression adapter for opencode. Model-driven context management via acp-kernel.",
+  "description": "The acp-kernel compression pipeline wired into OpenCode V2 (opencode2) as a plugin. Model-driven context management: bili_compress, bili_decompress, bili_search, bili_status.",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "./dist/index.js",
   "exports": {
     ".": {
       "import": "./dist/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "smoke": "node smoke.mjs"
   },
   "engines": {
-    "node": ">=20",
-    "opencode": ">=1.14.0"
+    "node": ">=20"
   },
   "keywords": [
     "opencode",
     "opencode-plugin",
+    "opencode2",
+    "v2",
     "context",
     "compression",
-    "acp"
+    "acp",
+    "bili"
   ],
   "license": "MIT",
   "author": "ranxianglei",
@@ -39,11 +44,11 @@
     "url": "https://github.com/ranxianglei/billion-context-opencode/issues"
   },
   "devDependencies": {
+    "@opencode-ai/plugin": "next",
     "@types/node": "^22.10.0",
-    "acp-kernel": "0.0.17",
+    "acp-kernel": "github:rorshopping/acp-kernel#ec9b85d",
     "tsup": "^8.5.1",
     "tsx": "^4.23.1",
-    "typescript": "^5.7.0",
-    "zod": "^4.0.0"
+    "typescript": "^5.7.0"
   }
 }

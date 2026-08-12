@@ -136,6 +136,15 @@ export class AcpRuntime {
     debug("drop-session", { sid: sessionId })
   }
 
+  /** Drop all in-memory state (plugin unload / reload). Disk state is kept. */
+  dropAll(): void {
+    this.cores.clear()
+    this.modelLimits.clear()
+    this.locks.clear()
+    this.turnCache.clear()
+    this.store.invalidate()
+  }
+
   /** Mark a session as recently used (moves it to the end of insertion order)
    *  and evict the oldest session if we've exceeded the cap. */
   private touch(sessionId: string): void {

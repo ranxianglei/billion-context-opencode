@@ -1,0 +1,8 @@
+This is a context-compression test. Perform these steps IN ORDER using ONLY the bili_* tools:
+
+1. Use the shell tool to run this EXACT command: cmd /c echo LINE 1 0123456789 & echo LINE 2 0123456789 & echo LINE 3 0123456789 & echo LINE 4 0123456789 & echo LINE 5 0123456789
+   Use only that one shell call.
+2. Call bili_status with no arguments and note the message references it lists.
+3. Call bili_compress to compress the ENTIRE shell tool output from step 1 into a short summary, using the message references from step 2. Topic: "shell-output-test".
+4. Call bili_status again.
+5. Reply with a report: (a) the bili_status refs from step 2, (b) the bili_compress result from step 3, (c) the bili_status output from step 4. Label each part. Do not call any other tools.

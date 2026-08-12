@@ -1,0 +1,4 @@
+{
+  "compaction": { "auto": false },
+  "plugins": ["-opencode-acp", "../dist/index.js"]
+}

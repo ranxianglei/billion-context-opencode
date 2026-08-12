@@ -4,11 +4,10 @@ import { AcpRuntime } from "./runtime.js"
 import type { AdapterConfig } from "./config.js"
 import { debug, warn } from "./log.js"
 import {
-  octoToCoreMessages,
+  v2ToCoreMessages,
   reassemble,
   makeNudgeMessage,
-  deriveSessionId,
-  type OctoMessage,
+  type V2Message,
 } from "./messages.js"
 import { estimateTokens, collectCoveredMessageIds } from "./tokens.js"
 import { makeCompressTool } from "./compress-tool.js"
@@ -17,102 +16,121 @@ import { makeSearchTool } from "./search-tool.js"
 import { makeStatusTool } from "./status-tool.js"
 import { SYSTEM_PROMPT } from "./system-prompt.js"
 
-interface OctoModel {
+const SYSTEM_MARKER = "BILI CONTEXT MANAGEMENT"
+
+interface ModelRef {
+  id?: string
+  providerID?: string
+}
+
+/** OpenCode V2 context-hook event. Mutable: system + messages + tools, fired
+ *  immediately before model dispatch. This shape was verified empirically on
+ *  opencode2 v0.0.0-next-17276 (see the probe harness under .test-clean/). */
+interface ContextEvent {
+  sessionID: string
+  agent?: string
+  model?: ModelRef
+  system: Array<{ type: string; text?: string; [key: string]: unknown }>
+  messages: V2Message[]
+  tools: Record<string, unknown>
+}
+
+interface CatalogModelInfo {
+  id: string
+  providerID: string
   limit?: { context?: number }
 }
 
-interface TransformOutput {
-  messages: OctoMessage[]
-}
-
-interface SystemTransformInput {
-  sessionID?: string
-  model?: OctoModel
-}
-
-interface SystemTransformOutput {
-  system: string[]
-}
-
-interface OctoHooks {
-  tool?: Record<string, unknown>
-  "experimental.chat.system.transform"?: (input: SystemTransformInput, output: SystemTransformOutput) => Promise<void>
-  "experimental.chat.messages.transform"?: (input: unknown, output: TransformOutput) => Promise<void>
-}
-
-interface PluginInput {
-  [key: string]: unknown
-}
-
-export default async function biliAcpPlugin(
-  _input: PluginInput,
-  options: Record<string, unknown> = {},
-): Promise<OctoHooks> {
-  const adapter: AdapterConfig = {
-    modelContextLimit: numOpt(options.modelContextLimit),
-    protectedTools: strArrayOpt(options.protectedTools),
-    preserveRecentMessages: numOpt(options.preserveRecentMessages),
-    debug: boolOpt(options.debug),
-    coreOverrides: options.coreOverrides as AdapterConfig["coreOverrides"],
+/** Structural subset of the V2 plugin setup context (Plugin.define). Deliberately
+ *  NOT imported from @opencode-ai/plugin so the built artifact has zero runtime
+ *  dependencies and cannot hit V1/V2 package-resolution conflicts. */
+interface PluginSetupContext {
+  options: Readonly<Record<string, unknown>>
+  tool: {
+    transform(cb: (tools: { add(tool: unknown): void }) => void): Promise<{ dispose(): Promise<void> }>
   }
+  session: {
+    hook(name: "context", cb: (event: ContextEvent) => Promise<void> | void): Promise<{ dispose(): Promise<void> }>
+  }
+  catalog: {
+    model: {
+      list(): Promise<{ data: CatalogModelInfo[] }>
+    }
+  }
+}
 
-  if (adapter.debug) process.env.BILI_ACP_DEBUG = "1"
+export default {
+  id: "billion-context-opencode-v2",
+  setup: async (ctx: PluginSetupContext) => {
+    const options = (ctx.options ?? {}) as Record<string, unknown>
+    const adapter: AdapterConfig = {
+      modelContextLimit: numOpt(options.modelContextLimit),
+      protectedTools: strArrayOpt(options.protectedTools),
+      preserveRecentMessages: numOpt(options.preserveRecentMessages),
+      debug: boolOpt(options.debug),
+      coreOverrides: options.coreOverrides as AdapterConfig["coreOverrides"],
+    }
+    if (adapter.debug) process.env.BILI_ACP_DEBUG = "1"
 
-  const runtime = new AcpRuntime(adapter)
+    const runtime = new AcpRuntime(adapter)
+    // Per-session model context limit, resolved from the catalog on first use.
+    const modelLimits = new Map<string, number | undefined>()
 
-  const hooks: OctoHooks = {
-    tool: {
-      bili_compress: makeCompressTool(runtime),
-      bili_decompress: makeDecompressTool(runtime),
-      bili_search: makeSearchTool(runtime),
-      bili_status: makeStatusTool(runtime),
-    },
-
-    "experimental.chat.system.transform": async (input, output) => {
-      const ctx = input.model?.limit?.context
-      if (ctx && ctx > 0 && input.sessionID) {
-        // Per-session authoritative value. We deliberately do NOT keep a
-        // cross-session fallback: in a multi-session process (subagents,
-        // parallel sessions) reusing another session's limit leaks the wrong
-        // threshold into a session's first turn — e.g. a 32K model B running
-        // right after a 200K model A would inherit A's 200K threshold and skip
-        // nudges it should fire. Instead, messages.transform resolves to
-        // FALLBACK_LIMIT (200K, see config.ts) on the very first turn, before
-        // this hook has recorded the per-session limit. That's the conservative
-        // default for an unknown model and self-corrects on the next turn.
-        runtime.setModelLimit(input.sessionID, ctx)
+    const resolveModelLimit = async (model: ModelRef | undefined): Promise<number | undefined> => {
+      if (!model || typeof model.id !== "string" || typeof model.providerID !== "string") return undefined
+      const key = `${model.providerID}/${model.id}`
+      if (modelLimits.has(key)) return modelLimits.get(key)
+      let limit: number | undefined
+      try {
+        const out = await ctx.catalog.model.list()
+        const found = out.data.find((m) => m.id === model.id && m.providerID === model.providerID)
+        limit = typeof found?.limit?.context === "number" ? found.limit.context : undefined
+      } catch (err) {
+        warn("catalog.model.list failed:", err instanceof Error ? err.message : String(err))
       }
-      output.system.push(SYSTEM_PROMPT)
-    },
+      modelLimits.set(key, limit)
+      return limit
+    }
 
-    "experimental.chat.messages.transform": async (_input, output) => {
-      const msgs = output.messages
-      const sessionID = deriveSessionId(msgs)
+    await ctx.tool.transform((tools) => {
+      const opts = { codemode: false, permission: "allow" }
+      tools.add({ ...makeCompressTool(runtime), options: opts })
+      tools.add({ ...makeDecompressTool(runtime), options: opts })
+      tools.add({ ...makeSearchTool(runtime), options: opts })
+      tools.add({ ...makeStatusTool(runtime), options: opts })
+    })
+
+    await ctx.session.hook("context", async (event: ContextEvent) => {
+      const sessionID = event.sessionID
+      const msgs = Array.isArray(event.messages) ? event.messages : []
       if (!sessionID || msgs.length === 0) return
       try {
-        await runtime.acquireLock(sessionID, () => runPipeline(msgs, sessionID, runtime, output))
+        const limit = await resolveModelLimit(event.model)
+        if (limit && limit > 0) runtime.setModelLimit(sessionID, limit)
+        await runtime.acquireLock(sessionID, () => runPipeline(msgs, sessionID, runtime, event))
       } catch (err) {
-        warn("messages.transform failed:", err instanceof Error ? err.message : String(err))
+        warn("context hook failed:", err instanceof Error ? err.message : String(err))
       }
-    },
-  }
+    })
 
-  return hooks
+    return () => {
+      runtime.dropAll()
+    }
+  },
 }
 
 async function runPipeline(
-  msgs: OctoMessage[],
+  msgs: V2Message[],
   sessionID: string,
   runtime: AcpRuntime,
-  output: TransformOutput,
+  event: ContextEvent,
 ): Promise<void> {
-  const { cores, partIdToCoreIds } = octoToCoreMessages(msgs)
+  const conversion = v2ToCoreMessages(msgs)
+  const { cores } = conversion
   const state: CompressionState = await runtime.stateFor(sessionID)
 
   const coveredIds = collectCoveredMessageIds(state)
   const tokenCount = estimateTokens(cores, coveredIds)
-  // getModelLimit returns undefined on a session's first turn (before
-  // system.transform records it). configFor(undefined) → FALLBACK_LIMIT.
   const resolved = runtime.configFor(runtime.getModelLimit(sessionID))
   debug("transform-in", { sid: sessionID, msgs: msgs.length, cores: cores.length, tokens: tokenCount, limit: resolved.modelContextLimit, blocks: state.blocks.length })
 
@@ -125,27 +143,31 @@ async function runPipeline(
   })
 
   runtime.setCores(sessionID, cores)
-  // Cache this turn so bili_status (and any other status read) can reuse it
-  // without recomputing the pipeline. setCores above already invalidated any
-  // prior entry; cache the fresh one after cores are stored.
   runtime.cacheTurn(sessionID, turn.state, cores, tokenCount, turn)
   await runtime.save(turn.state, sessionID)
 
-  const reassembled = reassemble(turn.messages, msgs, partIdToCoreIds, sessionID)
+  const reassembled = reassemble(turn.messages, msgs, conversion, sessionID)
 
   if (turn.nudge && turn.nudge.shouldInject) {
     const rendered = renderNudgeText(turn.nudge)
     const text = [rendered.voice ? `[${rendered.voice}]` : "", rendered.text].filter(Boolean).join("\n")
-    reassembled.push(makeNudgeMessage(`bili_nudge_${turn.nudge.tier ?? 0}_${Date.now()}`, sessionID, text, msgs))
+    reassembled.push(makeNudgeMessage(`bili_nudge_${turn.nudge.tier ?? 0}_${Date.now()}`, sessionID, text))
     debug("nudge-injected", { sid: sessionID, tier: turn.nudge.tier, reason: turn.nudge.reason })
   }
 
-  // opencode calls this hook with a bare wrapper `{ messages: msgs }` and
-  // ignores the returned/assigned value. Reassigning `output.messages` alone
-  // (a new array) is invisible to the caller, so the request is never shrunk.
-  // Rebuild the *same* array in place instead.
+  // The host passes this exact array to the provider; rebuild it in place.
   msgs.splice(0, msgs.length, ...reassembled)
-  output.messages = reassembled
+
+  // System prompt: upsert by marker. The host rebuilds `event.system` each
+  // dispatch, so replace (not append) to stay idempotent.
+  const system = event.system
+  if (Array.isArray(system)) {
+    const idx = system.findIndex((p) => p.type === "text" && p.text && p.text.includes(SYSTEM_MARKER))
+    const part = { type: "text", text: SYSTEM_PROMPT }
+    if (idx >= 0) system[idx] = part
+    else system.push(part)
+  }
+
   debug("transform-out", { sid: sessionID, outMsgs: reassembled.length, nudge: !!turn.nudge?.shouldInject })
 }
 

@@ -1,37 +1,31 @@
 import type { CoreMessage } from "acp-kernel"
-import { debug, warn } from "./log.js"
+import { debug } from "./log.js"
 
-export interface OctoPart {
-  id: string
+export interface V2Part {
   type: string
+  id?: string
+  name?: string
   text?: string
-  ignored?: boolean
-  synthetic?: boolean
-  tool?: string
-  callID?: string
-  state?: {
-    status: "pending" | "running" | "completed" | "error"
-    input?: unknown
-    output?: unknown
-    error?: string
-    title?: string
-  }
+  input?: unknown
+  result?: { type?: string; value?: unknown }
   [key: string]: unknown
 }
 
-export interface OctoMessageInfo {
-  id: string
-  sessionID: string
-  role: "user" | "assistant"
-  time: { created: number; completed?: number }
-  agent?: string
-  model?: { providerID: string; modelID: string }
+export interface V2Message {
+  id?: string
+  role: string
+  content?: V2Part[]
+  metadata?: Record<string, unknown>
   [key: string]: unknown
 }
 
-export interface OctoMessage {
-  info: OctoMessageInfo
-  parts: OctoPart[]
+/** Stable per-message identity for a V2 message. `role:"tool"` messages carry
+ *  no id in the context hook (observed on opencode2 next-17276), so fall back
+ *  to a positional marker — but only for messages whose parts all carry their
+ *  own tool call ids. */
+function messageBaseId(m: V2Message, index: number): string {
+  if (typeof m.id === "string" && m.id) return m.id
+  return `__msg${index}`
 }
 
 function safeStringify(value: unknown): string {
@@ -43,187 +37,201 @@ function safeStringify(value: unknown): string {
   }
 }
 
-export interface ConversionResult {
-  cores: CoreMessage[]
-  partIdToCoreIds: Map<string, string[]>
+export function resultValueToText(result: V2Part["result"] | undefined): string {
+  if (!result || typeof result !== "object") return ""
+  const value = (result as { value?: unknown }).value
+  switch (result.type) {
+    case "error":
+      return `Error: ${safeStringify(value)}`
+    case "json":
+      return safeStringify(value)
+    case "content":
+      if (Array.isArray(value)) {
+        return value
+          .map((c) => {
+            if (c && typeof c === "object" && (c as { type?: string }).type === "file") {
+              const f = c as { uri?: string; mime?: string }
+              return `[file ${f.uri ?? ""} (${f.mime ?? ""})]`
+            }
+            const t = c as { text?: string }
+            return typeof t.text === "string" ? t.text : ""
+          })
+          .join("\n")
+      }
+      return safeStringify(value)
+    default:
+      return safeStringify(value)
+  }
 }
 
-export function octoToCoreMessages(msgs: OctoMessage[]): ConversionResult {
-  const cores: CoreMessage[] = []
-  const partIdToCoreIds = new Map<string, string[]>()
+export interface OriginRef {
+  mi: number
+  pi: number
+}
 
-  for (const msg of msgs) {
-    const role: "user" | "assistant" = msg.info.role === "assistant" ? "assistant" : "user"
-    let partIdx = -1
-    for (const part of msg.parts) {
-      partIdx++
+export interface ConversionResult {
+  cores: CoreMessage[]
+  origin: Map<string, OriginRef>
+  partToCoreIds: Map<string, string[]>
+}
+
+export function v2ToCoreMessages(msgs: V2Message[]): ConversionResult {
+  const cores: CoreMessage[] = []
+  const origin = new Map<string, OriginRef>()
+  const partToCoreIds = new Map<string, string[]>()
+
+  msgs.forEach((msg, mi) => {
+    const base = messageBaseId(msg, mi)
+    const parts = Array.isArray(msg.content) ? msg.content : []
+    parts.forEach((part, pi) => {
+      const key = `${mi}:${pi}`
       if (part.type === "text") {
-        if (part.ignored) continue
-        const text = part.text ?? ""
-        const id = `${msg.info.id}#t${partIdx}`
-        cores.push({ id, role, contentType: "text", text })
-        partIdToCoreIds.set(part.id, [id])
+        const id = `${base}#t${pi}`
+        cores.push({ id, role: msg.role === "assistant" ? "assistant" : "user", contentType: "text", text: part.text ?? "" })
+        origin.set(id, { mi, pi })
+        partToCoreIds.set(key, [id])
       } else if (part.type === "reasoning") {
-        const id = `${msg.info.id}#r${partIdx}`
+        const id = `${base}#r${pi}`
         cores.push({ id, role: "assistant", contentType: "reasoning", text: part.text ?? "" })
-        partIdToCoreIds.set(part.id, [id])
-      } else if (part.type === "tool" && part.callID && part.tool) {
-        const callId = `${msg.info.id}#c${partIdx}`
-        const toolCallId = part.callID
-        const toolName = part.tool
+        origin.set(id, { mi, pi })
+        partToCoreIds.set(key, [id])
+      } else if (part.type === "tool-call" && typeof part.id === "string") {
+        const callId = `${part.id}#call`
+        const resultId = `${part.id}#result`
         cores.push({
           id: callId,
           role: "assistant",
           contentType: "tool-call",
-          toolName,
-          toolCallId,
-          text: safeStringify(part.state?.input),
+          toolName: part.name,
+          toolCallId: part.id,
+          text: safeStringify(part.input),
         })
-        const ids = [callId]
-        if (part.state?.status === "completed" || part.state?.status === "error") {
-          const resultId = `${msg.info.id}#x${partIdx}`
-          const outText =
-            part.state.status === "completed"
-              ? typeof part.state.output === "string"
-                ? part.state.output
-                : safeStringify(part.state.output)
-              : `Error: ${part.state.error ?? ""}`
-          cores.push({
-            id: resultId,
-            role: "tool",
-            contentType: "tool-result",
-            toolName,
-            toolCallId,
-            text: outText,
-          })
-          ids.push(resultId)
-        }
-        partIdToCoreIds.set(part.id, ids)
+        origin.set(callId, { mi, pi })
+        // Tool parts become [call, result] when the call has a matching result
+        // elsewhere in the batch (a role:"tool" message). Both must survive for
+        // the part to be kept — see reassemble().
+        partToCoreIds.set(key, [callId, resultId])
+      } else if (part.type === "tool-result" && typeof part.id === "string") {
+        const id = `${part.id}#result`
+        cores.push({
+          id,
+          role: "tool",
+          contentType: "tool-result",
+          toolName: part.name,
+          toolCallId: part.id,
+          text: resultValueToText(part.result),
+        })
+        origin.set(id, { mi, pi })
+        partToCoreIds.set(key, [id])
       }
+    })
+  })
+
+  return { cores, origin, partToCoreIds }
+}
+
+/** Messages with no compressible cores (e.g. media-only attachments) must never
+ *  be dropped by the pipeline — there is no core id to cover or restore. */
+function hasCompressiblePart(msg: V2Message): boolean {
+  const parts = Array.isArray(msg.content) ? msg.content : []
+  return parts.some((p) => p.type === "text" || p.type === "reasoning" || p.type === "tool-call" || p.type === "tool-result")
+}
+
+function syntheticMessage(core: CoreMessage): V2Message {
+  const text = core.text ?? ""
+  if (core.id.startsWith("acp_summary_")) {
+    return {
+      id: `bili_summary_${core.id.replace("acp_summary_", "")}`,
+      role: "user",
+      content: [{ type: "text", text }],
     }
   }
-
-  return { cores, partIdToCoreIds }
-}
-
-function findTemplateInfo(msgs: OctoMessage[]): OctoMessageInfo | undefined {
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i]!.info.role === "user") return msgs[i]!.info
-  }
-  return msgs[0]?.info
-}
-
-function syntheticUserMessage(
-  id: string,
-  sessionID: string,
-  text: string,
-  template: OctoMessageInfo | undefined,
-): OctoMessage {
-  const base = template ?? {
-    id,
-    sessionID,
-    role: "user" as const,
-    time: { created: Date.now() },
-    agent: "build",
-    model: { providerID: "opencode", modelID: "unknown" },
-  }
   return {
-    info: { ...base, id, sessionID, role: "user", time: { created: Date.now() } },
-    parts: [{ id: `${id}_p`, sessionID, messageID: id, type: "text", text }],
+    role: "user",
+    content: [{ type: "text", text }],
   }
+}
+
+function partSurvives(part: V2Part, coreIds: string[] | undefined, outById: Map<string, CoreMessage>): boolean {
+  if (!coreIds || coreIds.length === 0) return true
+  if (part.type === "tool-call") {
+    // Keep a tool-call part only when BOTH the call and its matching result
+    // survived — a lone call would confuse model providers downstream.
+    return coreIds.every((id) => outById.has(id))
+  }
+  if (part.type === "tool-result" && typeof part.id === "string") {
+    // Mirror rule for results: a dangling tool-result (no surviving call) must
+    // not leak into provider history.
+    return outById.has(`${part.id}#call`) && outById.has(`${part.id}#result`)
+  }
+  return coreIds.some((id) => outById.has(id))
 }
 
 export function reassemble(
   outputCores: CoreMessage[],
-  inputMsgs: OctoMessage[],
-  partIdToCoreIds: Map<string, string[]>,
+  inputMsgs: V2Message[],
+  conversion: ConversionResult,
   sessionID: string,
-): OctoMessage[] {
-  const outCoreById = new Map(outputCores.map((c) => [c.id, c]))
-  const originalByCoreId = new Map<string, number>()
-  for (let mi = 0; mi < inputMsgs.length; mi++) {
-    for (const part of inputMsgs[mi]!.parts) {
-      const ids = partIdToCoreIds.get(part.id)
-      if (ids) for (const id of ids) originalByCoreId.set(id, mi)
-    }
-  }
+): V2Message[] {
+  const { origin, partToCoreIds } = conversion
+  const outById = new Map(outputCores.map((c) => [c.id, c]))
 
-  const template = findTemplateInfo(inputMsgs)
-  const result: OctoMessage[] = []
+  const result: V2Message[] = []
   const emitted = new Set<number>()
+  // Pointer to the next original message not yet considered, so media-only
+  // (no-core) messages are emitted in place between surviving messages.
+  let cursor = 0
 
-  for (const core of outputCores) {
-    const mi = originalByCoreId.get(core.id)
-    if (mi === undefined) {
-      result.push(syntheticUserMessage(core.id, sessionID, core.text ?? "", template))
-      continue
-    }
-    if (emitted.has(mi)) continue
+  const emitMessage = (mi: number): void => {
+    if (mi < 0 || mi >= inputMsgs.length || emitted.has(mi)) return
     emitted.add(mi)
     const orig = inputMsgs[mi]!
-    const parts: OctoPart[] = []
-    for (const p of orig.parts) {
-      const ids = partIdToCoreIds.get(p.id)
-      if (!ids) {
-        parts.push(p)
-        continue
-      }
-      if (p.type === "tool" && ids.length >= 2) {
-        // tool part → [callId, resultId] (result only present for completed/error).
-        // Keep the part ONLY if call AND result both survived, so opencode never
-        // sees a tool-call without its matching result (or vice versa) — that
-        // would produce malformed history that confuses model providers.
-        const callAlive = outCoreById.has(ids[0]!)
-        const resultAlive = outCoreById.has(ids[1]!)
-        if (!(callAlive && resultAlive)) continue
-        parts.push(p)
-        continue
-      }
-      const survived = ids.some((id) => outCoreById.has(id))
-      if (!survived) continue
-      if (p.type === "text") {
-        const tagged = outCoreById.get(ids[0]!)
-        parts.push({ ...p, text: tagged?.text ?? p.text })
-      } else {
-        parts.push(p)
+    const parts: V2Part[] = []
+    const srcParts = Array.isArray(orig.content) ? orig.content : []
+    for (let pi = 0; pi < srcParts.length; pi++) {
+      const part = srcParts[pi]!
+      const coreIds = partToCoreIds.get(`${mi}:${pi}`)
+      if (!coreIds || partSurvives(part, coreIds, outById)) {
+        if (part.type === "text" && coreIds && coreIds.length > 0) {
+          const tagged = outById.get(coreIds[0]!)
+          parts.push(tagged ? { ...part, text: tagged.text ?? part.text } : part)
+        } else {
+          parts.push(part)
+        }
       }
     }
-    if (parts.length) result.push({ info: orig.info, parts })
+    if (parts.length > 0) result.push({ ...orig, content: parts })
   }
 
+  for (const core of outputCores) {
+    const ref = origin.get(core.id)
+    if (ref === undefined) {
+      result.push(syntheticMessage(core))
+      continue
+    }
+    // Flush any intervening media-only messages that must be preserved.
+    while (cursor < ref.mi) {
+      if (!emitted.has(cursor) && !hasCompressiblePart(inputMsgs[cursor]!)) emitMessage(cursor)
+      cursor++
+    }
+    if (cursor === ref.mi) cursor++
+    emitMessage(ref.mi)
+  }
+
+  // Trailing media-only (or otherwise no-core) messages.
+  while (cursor < inputMsgs.length) {
+    if (!emitted.has(cursor) && !hasCompressiblePart(inputMsgs[cursor]!)) emitMessage(cursor)
+    cursor++
+  }
+
+  debug("reassemble", { sid: sessionID, inMsgs: inputMsgs.length, outMsgs: result.length, kept: emitted.size })
   return result
 }
 
-export function makeNudgeMessage(
-  id: string,
-  sessionID: string,
-  text: string,
-  inputMsgs: OctoMessage[],
-): OctoMessage {
-  return syntheticUserMessage(id, sessionID, text, findTemplateInfo(inputMsgs))
-}
-
-export function deriveSessionId(msgs: OctoMessage[]): string | undefined {
-  // Scan for the first message with a non-empty sessionID rather than blindly
-  // trusting msgs[0] — opencode may prepend synthetic/system messages whose
-  // sessionID differs or is empty, which would otherwise silently skip the
-  // whole pipeline (index.ts early-returns on a falsy sessionID).
-  let first: string | undefined
-  let seenDifferent = false
-  for (const m of msgs) {
-    const sid = m?.info?.sessionID
-    if (!sid) continue
-    if (first === undefined) first = sid
-    else if (sid !== first) seenDifferent = true
+export function makeNudgeMessage(id: string, sessionID: string, text: string): V2Message {
+  return {
+    id,
+    role: "user",
+    content: [{ type: "text", text }],
   }
-  // opencode normally sends a single session's messages per transform call.
-  // If we ever see mixed sessionIDs (e.g. a future subagent/fork flow), surface
-  // it so a silent cross-session state merge doesn't go undiagnosed — we still
-  // proceed on the first session, which is the safe default. Escalated to warn
-  // (not debug) because the consequence is wrong-state-writes: production runs
-  // would otherwise silently fold a second session's messages into the first.
-  if (first && seenDifferent) {
-    warn("deriveSessionId: mixed sessionIDs in one transform batch; proceeding on first", { first })
-  }
-  return first
 }
