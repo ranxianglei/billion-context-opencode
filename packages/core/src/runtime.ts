@@ -136,8 +136,16 @@ export class AcpRuntime {
     debug("drop-session", { sid: sessionId })
   }
 
+  /** Drop ALL in-memory state for every session (plugin teardown / dispose).
+   *   Persistent state on disk is untouched. Used by the V2 plugin's dispose
+   *   callback. */
+  dropAll(): void {
+    for (const sid of Array.from(this.cores.keys())) this.dropSession(sid)
+    debug("drop-all", { count: this.cores.size })
+  }
+
   /** Mark a session as recently used (moves it to the end of insertion order)
-   *  and evict the oldest session if we've exceeded the cap. */
+   *   and evict the oldest session if we've exceeded the cap. */
   private touch(sessionId: string): void {
     // Re-insert to bump to MRU position for LRU eviction.
     const c = this.cores.get(sessionId)

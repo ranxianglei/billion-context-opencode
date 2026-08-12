@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createInitialState, type CompressionState } from "acp-kernel"
-import { mergeInitialState, SessionStateStore } from "../src/state.js"
+import { mergeInitialState, SessionStateStore } from "@bili/core"
 
 const fresh = createInitialState()
 
