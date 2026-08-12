@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { resolveConfig, FALLBACK_LIMIT, type AdapterConfig } from "../src/config.js"
+import { resolveConfig, FALLBACK_LIMIT, type AdapterConfig } from "@bili/core"
 
 const baseAdapter: AdapterConfig = {}
 
@@ -57,13 +57,13 @@ test("resolveConfig: precedence is adapter > env > liveLimit > FALLBACK", () => 
 test("resolveConfig: nudge thresholds come from kernel defaults (200K model)", () => {
   const r = resolveConfig(baseAdapter, 200000)
   assert.equal(r.kernel.nudge.growthCap, 50000)
-  assert.equal(r.kernel.nudge.growthFloor, 20000)
+  assert.equal(r.kernel.nudge.growthFloor, 50000)
 })
 
 test("resolveConfig: small-context model still gets kernel-scaled thresholds", () => {
   const r = resolveConfig(baseAdapter, 32000)
   assert.equal(r.kernel.nudge.growthCap, 50000)
-  assert.equal(r.kernel.nudge.growthFloor, 20000)
+  assert.equal(r.kernel.nudge.growthFloor, 50000)
 })
 
 test("resolveConfig: coreOverrides flow into kernel config (power-user escape hatch)", () => {

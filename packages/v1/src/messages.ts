@@ -1,5 +1,5 @@
 import type { CoreMessage } from "acp-kernel"
-import { debug, warn } from "./log.js"
+import { debug, warn } from "@bili/core"
 
 export interface OctoPart {
   id: string
