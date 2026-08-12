@@ -4,6 +4,8 @@ The [acp-kernel](https://github.com/ranxianglei/acp-kernel) compression pipeline
 
 Independent implementation (modeled after `billion-context-pi`, the Pi adapter). Does **not** depend on or conflict with `opencode-acp` — all tools are prefixed `bili_`.
 
+> **V2 adapter** — [`./v2`](./v2) is the OpenCode V2 (`opencode2`) port: same `acp-kernel` core and `bili_*` tools, wired via the V2 plugin API (`ctx.session.hook("context")` + `ctx.tool.transform`). See its [README](./v2/README.md).
+
 ## Tools
 
 | Tool | Description |
