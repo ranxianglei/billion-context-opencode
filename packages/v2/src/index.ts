@@ -7,10 +7,6 @@ import {
   warn,
   estimateTokens,
   collectCoveredMessageIds,
-  makeCompressTool,
-  makeDecompressTool,
-  makeSearchTool,
-  makeStatusTool,
   SYSTEM_PROMPT,
   numOpt,
   strArrayOpt,
@@ -22,8 +18,14 @@ import {
   makeNudgeMessage,
   type V2Message,
 } from "./messages.js"
+import {
+  makeV2CompressTool,
+  makeV2DecompressTool,
+  makeV2SearchTool,
+  makeV2StatusTool,
+} from "./tools.js"
 
-const SYSTEM_MARKER = "BILI CONTEXT MANAGEMENT"
+const SYSTEM_MARKER = "ACP TOOLS (billion-context)"
 
 interface ModelRef {
   id?: string
@@ -101,10 +103,10 @@ export default {
 
     await ctx.tool.transform((tools) => {
       const opts = { codemode: false, permission: "allow" }
-      tools.add({ ...makeCompressTool(runtime), options: opts })
-      tools.add({ ...makeDecompressTool(runtime), options: opts })
-      tools.add({ ...makeSearchTool(runtime), options: opts })
-      tools.add({ ...makeStatusTool(runtime), options: opts })
+      tools.add({ ...makeV2CompressTool(runtime), options: opts })
+      tools.add({ ...makeV2DecompressTool(runtime), options: opts })
+      tools.add({ ...makeV2SearchTool(runtime), options: opts })
+      tools.add({ ...makeV2StatusTool(runtime), options: opts })
     })
 
     await ctx.session.hook("context", async (event: ContextEvent) => {
