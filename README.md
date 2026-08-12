@@ -4,6 +4,20 @@ The [acp-kernel](https://github.com/ranxianglei/acp-kernel) compression pipeline
 
 Independent implementation (modeled after `billion-context-pi`, the Pi adapter). Does **not** depend on or conflict with `opencode-acp` — all tools are prefixed `bili_`.
 
+## OpenCode v2 (opencode2)
+
+This branch targets opencode v1 (Octo transform hooks). The opencode2 adapter uses a different plugin API (context hook) and is **not backward compatible**, so it lives on the [`v2` branch](https://github.com/ranxianglei/billion-context-opencode/tree/v2) as `billion-context-opencode-v2`:
+
+```jsonc
+// opencode.json — opencode2
+{
+  "compaction": { "auto": false },
+  "plugin": ["github:ranxianglei/billion-context-opencode#v2.0.0"]
+}
+```
+
+Same four `bili_` tools and `<acp>` ref tags. Requires `acp-kernel` with the configurable `compressToolName` (fork `rorshopping/acp-kernel`, pinned in the branch's `package.json`).
+
 ## Tools
 
 | Tool | Description |
