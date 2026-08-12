@@ -40,7 +40,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "acp-kernel": "0.0.17",
+    "acp-kernel": "0.0.19",
     "tsup": "^8.5.1",
     "tsx": "^4.23.1",
     "typescript": "^5.7.0",
