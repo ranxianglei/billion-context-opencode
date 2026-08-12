@@ -6,7 +6,9 @@
   "scripts": {
     "build": "npm run build --workspace billion-context-opencode",
     "typecheck": "npm run typecheck --workspaces",
-    "test": "npm run test --workspace billion-context-opencode"
+    "test": "npm run test --workspace billion-context-opencode",
+    "smoke": "node smoke.mjs",
+    "smoke:v2": "node smoke-v2.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0"
