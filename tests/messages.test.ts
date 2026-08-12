@@ -127,6 +127,40 @@ test("reassemble: trailing whitespace difference is not treated as a rewrite", (
   assert.equal(out[0]!.parts[0]!.state!.output, "done", "original output kept")
 })
 
+test("reassemble: kernel-truncated tool error replaces error without changing status", () => {
+  const msg = toolMsg("a2", "s1", "bash", "call_1", "unused")
+  msg.parts[0]!.state = { status: "error", input: { a: 1 }, error: "ORIGINAL_LONG_ERROR", title: "bash" }
+  const { cores, partIdToCoreIds } = octoToCoreMessages([msg])
+  assert.equal(cores.find((c) => c.id === "a2#x0")!.text, "Error: ORIGINAL_LONG_ERROR", "error projected for kernel")
+  const truncated = cores.map((c) => (c.id === "a2#x0" ? { ...c, text: "Error: TRUNCATED_ERROR" } : c))
+  const out = reassemble(truncated, [msg], partIdToCoreIds, "s1")
+  const state = out[0]!.parts[0]!.state!
+  assert.equal(state.status, "error", "error status preserved")
+  assert.equal(state.error, "TRUNCATED_ERROR", "adapter prefix removed before writing error")
+  assert.equal(state.output, undefined, "completed output field not introduced")
+})
+
+test("reassemble: interrupted tool output is projected and rewritten in metadata", () => {
+  const msg = toolMsg("a2", "s1", "bash", "call_1", "unused")
+  msg.parts[0]!.state = {
+    status: "error",
+    input: { a: 1 },
+    error: "Tool execution aborted",
+    metadata: { interrupted: true, output: "ORIGINAL_PARTIAL_OUTPUT", exitCode: 130 },
+    title: "bash",
+  }
+  const { cores, partIdToCoreIds } = octoToCoreMessages([msg])
+  assert.equal(cores.find((c) => c.id === "a2#x0")!.text, "ORIGINAL_PARTIAL_OUTPUT", "partial output projected for kernel")
+  const truncated = cores.map((c) => (c.id === "a2#x0" ? { ...c, text: "TRUNCATED_PARTIAL_OUTPUT" } : c))
+  const out = reassemble(truncated, [msg], partIdToCoreIds, "s1")
+  const state = out[0]!.parts[0]!.state!
+  assert.equal(state.status, "error", "interrupted status preserved")
+  assert.equal(state.error, "Tool execution aborted", "original interruption error preserved")
+  assert.equal(state.metadata?.interrupted, true, "interrupted marker preserved")
+  assert.equal(state.metadata?.output, "TRUNCATED_PARTIAL_OUTPUT", "truncated partial output written where OpenCode reads it")
+  assert.equal(state.metadata?.exitCode, 130, "other metadata preserved")
+})
+
 test("makeNudgeMessage produces a valid user message", () => {
   const msgs = [userMsg("u1", "s1", "hi")]
   const n = makeNudgeMessage("bili_nudge_0", "s1", "please compress", msgs)

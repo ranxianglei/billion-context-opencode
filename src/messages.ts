@@ -14,6 +14,7 @@ export interface OctoPart {
     input?: unknown
     output?: unknown
     error?: string
+    metadata?: Record<string, unknown>
     title?: string
   }
   [key: string]: unknown
@@ -41,6 +42,15 @@ function safeStringify(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+function toolResultBody(state: OctoPart["state"]): string | undefined {
+  if (state?.status === "completed") {
+    return typeof state.output === "string" ? state.output : safeStringify(state.output)
+  }
+  if (state?.status !== "error") return undefined
+  const interruptedOutput = state.metadata?.interrupted === true ? state.metadata.output : undefined
+  return typeof interruptedOutput === "string" ? interruptedOutput : `Error: ${state.error ?? ""}`
 }
 
 export interface ConversionResult {
@@ -82,19 +92,13 @@ export function octoToCoreMessages(msgs: OctoMessage[]): ConversionResult {
         const ids = [callId]
         if (part.state?.status === "completed" || part.state?.status === "error") {
           const resultId = `${msg.info.id}#x${partIdx}`
-          const outText =
-            part.state.status === "completed"
-              ? typeof part.state.output === "string"
-                ? part.state.output
-                : safeStringify(part.state.output)
-              : `Error: ${part.state.error ?? ""}`
           cores.push({
             id: resultId,
             role: "tool",
             contentType: "tool-result",
             toolName,
             toolCallId,
-            text: outText,
+            text: toolResultBody(part.state) ?? "",
           })
           ids.push(resultId)
         }
@@ -208,14 +212,17 @@ export function applyToolBody(part: OctoPart, resultCore: CoreMessage | undefine
   // truncation rewrites that text, and dropping the rewrite would leave the
   // full output in the request.
   const state = part.state
-  const originalText =
-    state?.status === "completed"
-      ? typeof state.output === "string"
-        ? state.output
-        : safeStringify(state.output)
-      : `Error: ${state?.error ?? ""}`
+  const originalText = toolResultBody(state)
+  if (!state || originalText === undefined) return part
   if (trimEnd(coreBody) === trimEnd(originalText)) return part
-  return { ...part, state: { status: "completed", ...state, output: coreBody } }
+  if (state.status === "completed") {
+    return { ...part, state: { ...state, output: coreBody } }
+  }
+  if (state.metadata?.interrupted === true && typeof state.metadata.output === "string") {
+    return { ...part, state: { ...state, metadata: { ...state.metadata, output: coreBody } } }
+  }
+  const error = coreBody.startsWith("Error: ") ? coreBody.slice("Error: ".length) : coreBody
+  return { ...part, state: { ...state, error } }
 }
 
 export function makeNudgeMessage(
