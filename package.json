@@ -4,7 +4,7 @@
   "type": "module",
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "npm run build --workspace billion-context-opencode && npm run build --workspace billion-context-opencode-v2",
+    "build": "npm run build --workspace billion-context-opencode",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspace billion-context-opencode"
   },

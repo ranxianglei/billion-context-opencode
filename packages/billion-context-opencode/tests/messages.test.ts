@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { octoToCoreMessages, reassemble, makeNudgeMessage, type OctoMessage } from "../src/messages.js"
+import { octoToCoreMessages, reassemble, makeNudgeMessage, type OctoMessage } from "../src/messages-v1.js"
 import { createCore, createInitialState, defaultConfig } from "acp-kernel"
 
 function userMsg(id: string, sessionID: string, text: string): OctoMessage {
