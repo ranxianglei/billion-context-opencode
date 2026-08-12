@@ -1,0 +1,121 @@
+name: Release
+
+on:
+    push:
+        branches: [master]
+    workflow_dispatch:
+        inputs:
+            force:
+                description: "Force publish even if not a release branch merge"
+                required: false
+                default: "false"
+
+# Release is triggered ONLY on push to master (not on PRs). A separate auto-tag
+# workflow would not work: GitHub Actions does not allow GITHUB_TOKEN-pushed
+# workflows to trigger other workflows. Everything (tag + publish + release) is
+# done in this one job. Only the `billion-context-opencode` package is published;
+# @bili/core is private and never published.
+jobs:
+    release:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Check commit type
+              id: check
+              run: |
+                  MERGE_MSG=$(git log -1 --pretty=%B)
+                  MERGE_TITLE=$(echo "$MERGE_MSG" | head -1)
+                  echo "Commit title: $MERGE_TITLE"
+
+                  FORCE="${{ github.event.inputs.force }}"
+                  IS_RELEASE="false"
+
+                  # Pattern 1: Standard merge of a release branch
+                  #   "Merge pull request #7 from ranxianglei/2026-08-13_release-v0.1.0"
+                  if echo "$MERGE_TITLE" | grep -qE 'Merge pull request #[0-9]+ from .*[0-9]{4}-[0-9]{2}-[0-9]{2}_release-v'; then
+                      IS_RELEASE="true"
+                      echo "Release branch detected (standard merge)"
+                  # Pattern 2: Squash merge of a release PR
+                  #   "release: v0.1.0 — monorepo + dual-shape single package (#9)"
+                  elif echo "$MERGE_TITLE" | grep -qE '^release: v[0-9]+\.[0-9]+\.[0-9]+'; then
+                      IS_RELEASE="true"
+                      echo "Release branch detected (squash merge)"
+                  elif [ "$FORCE" = "true" ]; then
+                      IS_RELEASE="true"
+                      echo "Force publish requested via workflow_dispatch"
+                  else
+                      echo "Not a release branch merge — skipping"
+                  fi
+
+                  echo "is_release=$IS_RELEASE" >> "$GITHUB_OUTPUT"
+
+            - name: Read version
+              if: steps.check.outputs.is_release == 'true'
+              id: version
+              run: |
+                  VERSION=$(node -p "require('./packages/billion-context-opencode/package.json').version")
+                  TAG="v${VERSION}"
+                  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+                  # Detect prerelease versions (e.g. 0.2.0-dev.1, 0.2.0-beta.2)
+                  if echo "$VERSION" | grep -q -- '-'; then
+                      echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+                      echo "npm_tag=dev" >> "$GITHUB_OUTPUT"
+                      echo "Prerelease detected: $VERSION → npm tag: dev"
+                  else
+                      echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+                      echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+                      echo "Stable release: $VERSION → npm tag: latest"
+                  fi
+
+            - uses: actions/setup-node@v4
+              if: steps.check.outputs.is_release == 'true'
+              with:
+                  node-version: 22
+                  cache: npm
+                  registry-url: https://registry.npmjs.org
+
+            - if: steps.check.outputs.is_release == 'true'
+              run: npm ci
+
+            - if: steps.check.outputs.is_release == 'true'
+              run: npm run build
+
+            - name: Create tag
+              if: steps.check.outputs.is_release == 'true'
+              run: |
+                  TAG="${{ steps.version.outputs.tag }}"
+                  if git rev-parse "$TAG" >/dev/null 2>&1; then
+                      echo "Tag $TAG already exists — skipping"
+                  else
+                      git config user.name "github-actions[bot]"
+                      git config user.email "github-actions[bot]@users.noreply.github.com"
+                      git tag -a "$TAG" -m "release $TAG (auto-tagged on merge)"
+                      git push origin "$TAG"
+                      echo "Created tag $TAG"
+                  fi
+
+            - name: Publish to npm
+              if: steps.check.outputs.is_release == 'true'
+              run: |
+                  NPM_TAG="${{ steps.version.outputs.npm_tag }}"
+                  echo "Publishing billion-context-opencode@${{ steps.version.outputs.version }} with tag: $NPM_TAG"
+                  npm publish --workspace billion-context-opencode --tag "$NPM_TAG"
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+            - name: Create GitHub Release
+              if: steps.check.outputs.is_release == 'true'
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ steps.version.outputs.tag }}
+                  generate_release_notes: true
+                  prerelease: ${{ steps.version.outputs.is_prerelease }}
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
