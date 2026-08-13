@@ -276,10 +276,6 @@ export function reassemble(
   return result
 }
 
-function trimEnd(s: string): string {
-  return s.replace(/\s+$/, "")
-}
-
 export function applyToolBody(part: OctoPart, resultCore: CoreMessage | undefined): OctoPart {
   const coreBody = resultCore?.text ?? ""
   if (!coreBody) return part
