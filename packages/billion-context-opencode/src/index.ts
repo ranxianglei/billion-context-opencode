@@ -23,6 +23,7 @@ import {
   deriveSessionId,
   type OctoMessage,
 } from "./messages-v1.js"
+import { selectV1TokenCount } from "./usage-v1.js"
 import {
   v2ToCoreMessages,
   reassemble as reassembleV2,
@@ -49,6 +50,10 @@ function buildAdapter(options: Record<string, unknown>): AdapterConfig {
 // V1 — opencode V1 plugin (experimental.chat.* hooks).
 // opencode V1 calls the default export as a function. This is that function.
 // ===========================================================================
+
+const V1_TAG_ETIQUETTE = `TAG ETIQUETTE
+- NEVER echo, repeat, or reference the acp XML tags in your responses. They are address labels for the compression tools, not content — anything you write is stored verbatim.
+- Assistant messages are untagged — infer their refs from adjacent tagged messages (refs are assigned sequentially).`
 
 interface OctoModel {
   limit?: { context?: number }
@@ -87,9 +92,22 @@ async function runPipelineV1(
   const state: CompressionState = await runtime.stateFor(sessionID)
 
   const coveredIds = collectCoveredMessageIds(state)
-  const tokenCount = estimateTokens(cores, coveredIds)
   const resolved = runtime.configFor(runtime.getModelLimit(sessionID))
-  debug("transform-in", { sid: sessionID, msgs: msgs.length, cores: cores.length, tokens: tokenCount, limit: resolved.modelContextLimit, blocks: state.blocks.length })
+  const estimatedTokens = estimateTokens(cores, coveredIds)
+  const usage = selectV1TokenCount(msgs, state, estimatedTokens)
+  const { tokenCount } = usage
+  debug("transform-in", {
+    sid: sessionID,
+    msgs: msgs.length,
+    cores: cores.length,
+    estimatedTokens,
+    reportedTokens: usage.reported?.total,
+    tokenCount,
+    tokenSource: usage.source,
+    usageFallbackReason: usage.fallbackReason,
+    limit: resolved.modelContextLimit,
+    blocks: state.blocks.length,
+  })
 
   const turn = runtime.core.processTurn({
     messages: cores,
@@ -100,7 +118,7 @@ async function runPipelineV1(
   })
 
   runtime.setCores(sessionID, cores)
-  runtime.cacheTurn(sessionID, turn.state, cores, tokenCount, turn)
+  runtime.cacheTurn(sessionID, turn.state, cores, tokenCount, turn, resolved)
   await runtime.save(turn.state, sessionID)
 
   const reassembled = reassembleV1(turn.messages, msgs, partIdToCoreIds, sessionID)
@@ -143,7 +161,7 @@ async function biliAcpPluginV1(
         // first-turn behavior before this hook records the limit.
         runtime.setModelLimit(input.sessionID, ctx)
       }
-      output.system.push(SYSTEM_PROMPT)
+      output.system.push(`${SYSTEM_PROMPT}\n\n${V1_TAG_ETIQUETTE}`)
     },
 
     "experimental.chat.messages.transform": async (_input, output) => {
@@ -236,7 +254,7 @@ async function runPipelineV2(
   })
 
   runtime.setCores(sessionID, cores)
-  runtime.cacheTurn(sessionID, turn.state, cores, tokenCount, turn)
+  runtime.cacheTurn(sessionID, turn.state, cores, tokenCount, turn, resolved)
   await runtime.save(turn.state, sessionID)
 
   const reassembled = reassembleV2(turn.messages, msgs, conversion, sessionID)

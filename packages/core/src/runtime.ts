@@ -21,6 +21,15 @@ interface TurnCacheEntry {
   state: CompressionState
   cores: CoreMessage[]
   tokenCount: number
+  /** Resolved kernel model limit used for this turn. */
+  modelLimit: number
+  /** Exact resolved kernel configuration used for this turn. */
+  config: ResolvedConfig
+  result: ProcessTurnResult
+}
+
+export interface CachedTurn {
+  tokenCount: number
   result: ProcessTurnResult
 }
 
@@ -61,18 +70,49 @@ export class AcpRuntime {
 
   /** Cache a processTurn result so bili_status can reuse it instead of
    *  recomputing the full pipeline. Only valid until the next save/cores change. */
-  cacheTurn(sessionId: string, state: CompressionState, cores: CoreMessage[], tokenCount: number, result: ProcessTurnResult): void {
-    this.turnCache.set(sessionId, { state, cores, tokenCount, result })
+  cacheTurn(
+    sessionId: string,
+    state: CompressionState,
+    cores: CoreMessage[],
+    tokenCount: number,
+    result: ProcessTurnResult,
+    config: ResolvedConfig,
+  ): void {
+    this.turnCache.set(sessionId, {
+      state,
+      cores,
+      tokenCount,
+      result,
+      config,
+      modelLimit: config.modelContextLimit,
+    })
   }
 
   /** Return a cached processTurn result if it is still fresh (same cores array
    *  reference + same state reference + same tokenCount). bili_status uses this
    *  to avoid recomputing the pipeline on every call. Returns undefined if stale. */
-  getCachedTurn(sessionId: string, state: CompressionState, cores: CoreMessage[], tokenCount: number): ProcessTurnResult | undefined {
+  getCachedTurn(
+    sessionId: string,
+    state: CompressionState,
+    cores: CoreMessage[],
+    tokenCount: number,
+    config?: ResolvedConfig,
+  ): ProcessTurnResult | undefined {
     const entry = this.turnCache.get(sessionId)
     if (!entry) return undefined
     if (entry.state !== state || entry.cores !== cores || entry.tokenCount !== tokenCount) return undefined
+    if (config !== undefined && (entry.config !== config || entry.modelLimit !== config.modelContextLimit)) return undefined
     return entry.result
+  }
+
+  /** Return the cached final token count and turn when state, cores, and the
+   * resolved model limit are exactly the transform inputs. This lets status
+   * share a reported-usage-driven V1 count without storing usage separately. */
+  getCachedTurnForInputs(sessionId: string, state: CompressionState, cores: CoreMessage[], config: ResolvedConfig): CachedTurn | undefined {
+    const entry = this.turnCache.get(sessionId)
+    if (!entry) return undefined
+    if (entry.state !== state || entry.cores !== cores || entry.config !== config || entry.modelLimit !== config.modelContextLimit) return undefined
+    return { tokenCount: entry.tokenCount, result: entry.result }
   }
 
   /** Serialize async work per session. `fn` runs only after all previously

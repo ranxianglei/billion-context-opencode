@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
 import { rm } from "node:fs/promises"
-import plugin from "./dist/index.js"
+import { homedir } from "node:os"
+import { join } from "node:path"
+import plugin from "./packages/billion-context-opencode/dist/index.js"
 
-await rm(process.env.HOME + "/.cache/opencode-bili-acp", { recursive: true, force: true })
 const sid = "smoke-" + Date.now()
+const stateFile = join(homedir(), ".cache", "opencode-bili-acp", `${sid}.acp.json`)
 const now = Date.now()
 
 function userMsg(id, text) {
@@ -55,16 +57,18 @@ function extractRef(msg) {
 }
 const u1Ref = extractRef(mout.messages[0])
 const a1Ref = extractRef(mout.messages[1])
-console.log("  u1 ref:", u1Ref, "| a1 ref:", a1Ref)
-assert.ok(u1Ref && a1Ref, "refs extractable from tags")
+const u2Ref = extractRef(mout.messages[2])
+const endRef = a1Ref ?? u2Ref
+console.log("  u1 ref:", u1Ref, "| compression end ref:", endRef)
+assert.ok(u1Ref && endRef, "compression boundary refs extractable from tags")
 
 // --- bili_status tool ---
 const statusResult = await hooks.tool.bili_status.execute({}, { sessionID: sid, messageID: "m_status", callID: "call_status", agent: "build", directory: "/tmp", abort: new AbortController().signal, metadata: () => {}, ask: async () => ({}) })
 console.log("✓ bili_status returned", typeof statusResult === "string" ? statusResult.slice(0, 80) + "..." : "object")
 
-// --- bili_compress tool: compress u1..a1 (large) ---
+// --- bili_compress tool: compress the oldest visible range ---
 const compressResult = await hooks.tool.bili_compress.execute({
-  content: [{ startId: u1Ref, endId: a1Ref, summary: "User and assistant discussed topic A in detail, covering alpha concepts and beta implementations across many repetitions for testing the compression pipeline end to end." }],
+  content: [{ startId: u1Ref, endId: endRef, summary: "User and assistant discussed topic A in detail, covering alpha concepts and beta implementations across many repetitions for testing the compression pipeline end to end." }],
 }, { sessionID: sid, messageID: "m_compress", callID: "call_compress", agent: "build", directory: "/tmp", abort: new AbortController().signal, metadata: () => {}, ask: async () => ({}) })
 console.log("✓ bili_compress:", compressResult.slice(0, 100))
 
@@ -82,4 +86,5 @@ console.log("✓ bili_search:", searchResult.slice(0, 100))
 const decompResult = await hooks.tool.bili_decompress.execute({ blockId: "b1", inline: true }, { sessionID: sid, messageID: "m_decomp", callID: "call_decomp", agent: "build", directory: "/tmp", abort: new AbortController().signal, metadata: () => {}, ask: async () => ({}) })
 console.log("✓ bili_decompress:", decompResult.slice(0, 100))
 
+await rm(stateFile, { force: true })
 console.log("\n=== ALL SMOKE TESTS PASSED ===")

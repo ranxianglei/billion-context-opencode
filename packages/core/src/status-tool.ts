@@ -26,11 +26,14 @@ async function handleStatus(args: Record<string, unknown>, runtime: AcpRuntime, 
   const cores = runtime.getCores(ctx.sessionID) ?? []
   const resolved = runtime.configFor(runtime.getModelLimit(ctx.sessionID) ?? 0)
 
-  const tokenCount = estimateTokens(cores, collectCoveredMessageIds(state))
-  // Reuse the transform hook's cached processTurn result when the inputs match,
-  // so a frequent bili_status call doesn't recompute the full pipeline.
+  // Reuse the transform hook's exact result and final token count when state,
+  // cores, and model limit still match. This is the only path by which status
+  // sees V1 provider usage; otherwise it deliberately falls back to text
+  // estimation because status has no host message snapshot.
+  const cached = runtime.getCachedTurnForInputs(ctx.sessionID, state, cores, resolved)
+  const tokenCount = cached?.tokenCount ?? estimateTokens(cores, collectCoveredMessageIds(state))
   const turn =
-    runtime.getCachedTurn(ctx.sessionID, state, cores, tokenCount) ??
+    cached?.result ??
     runtime.core.processTurn({
       messages: cores,
       state,
