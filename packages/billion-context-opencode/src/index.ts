@@ -50,6 +50,10 @@ function buildAdapter(options: Record<string, unknown>): AdapterConfig {
 // opencode V1 calls the default export as a function. This is that function.
 // ===========================================================================
 
+const V1_TAG_ETIQUETTE = `TAG ETIQUETTE
+- NEVER echo, repeat, or reference the acp XML tags in your responses. They are address labels for the compression tools, not content — anything you write is stored verbatim.
+- Assistant messages are untagged — infer their refs from adjacent tagged messages (refs are assigned sequentially).`
+
 interface OctoModel {
   limit?: { context?: number }
 }
@@ -143,7 +147,7 @@ async function biliAcpPluginV1(
         // first-turn behavior before this hook records the limit.
         runtime.setModelLimit(input.sessionID, ctx)
       }
-      output.system.push(SYSTEM_PROMPT)
+      output.system.push(`${SYSTEM_PROMPT}\n\n${V1_TAG_ETIQUETTE}`)
     },
 
     "experimental.chat.messages.transform": async (_input, output) => {
