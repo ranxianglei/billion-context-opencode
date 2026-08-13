@@ -1,4 +1,4 @@
-export { AcpRuntime } from "./runtime.js"
+export { AcpRuntime, type CachedTurn } from "./runtime.js"
 export { SessionStateStore, mergeInitialState } from "./state.js"
 export { resolveConfig, FALLBACK_LIMIT, type AdapterConfig, type ResolvedConfig } from "./config.js"
 export { estimateTokens, collectCoveredMessageIds } from "./tokens.js"

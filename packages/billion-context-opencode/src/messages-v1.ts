@@ -18,9 +18,34 @@ export interface OctoPart {
     input?: unknown
     output?: unknown
     error?: string
+    metadata?: {
+      interrupted?: boolean
+      output?: unknown
+      [key: string]: unknown
+    }
     title?: string
+    [key: string]: unknown
   }
   [key: string]: unknown
+}
+
+export interface OctoTokenUsage {
+  total?: number
+  input?: number
+  output?: number
+  reasoning?: number
+  cache?: {
+    read?: number
+    write?: number
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
+export interface OctoModelRef {
+  providerID: string
+  modelID: string
+  variant?: string
 }
 
 export interface OctoMessageInfo {
@@ -29,7 +54,12 @@ export interface OctoMessageInfo {
   role: "user" | "assistant"
   time: { created: number; completed?: number }
   agent?: string
-  model?: { providerID: string; modelID: string }
+  model?: Partial<OctoModelRef>
+  providerID?: string
+  modelID?: string
+  tokens?: OctoTokenUsage
+  summary?: boolean
+  error?: unknown
   [key: string]: unknown
 }
 
