@@ -110,6 +110,65 @@ test("compress + reassembly replaces covered messages with synthetic user summar
   assert.ok(hasU2, "recent uncompressed message preserved")
 })
 
+test("reassemble: kernel-truncated V1 tool body replaces completed output", () => {
+  const msgs = [toolMsg("a2", "s1", "bash", "call_1", "ORIGINAL_LONG_OUTPUT")]
+  const originalPart = msgs[0]!.parts[0]!
+  const { cores, partIdToCoreIds } = octoToCoreMessages(msgs)
+  const truncated = cores.map((c) => (c.id === "a2#x0" ? { ...c, text: "TRUNCATED_BODY" } : c))
+  const out = reassemble(truncated, msgs, partIdToCoreIds, "s1")
+  const part = out[0]!.parts[0]!
+  assert.notEqual(part, originalPart, "changed body produces a copied part")
+  assert.equal(part.state!.status, "completed", "completed status preserved")
+  assert.equal(part.state!.output, "TRUNCATED_BODY", "truncated body applied to completed output")
+  assert.deepEqual(part.state!.input, { a: 1 }, "input preserved")
+})
+
+test("reassemble: trailing whitespace difference is not treated as a V1 tool rewrite", () => {
+  const msgs = [toolMsg("a2", "s1", "bash", "call_1", "done")]
+  const originalPart = msgs[0]!.parts[0]!
+  const { cores, partIdToCoreIds } = octoToCoreMessages(msgs)
+  const padded = cores.map((c) => (c.id === "a2#x0" ? { ...c, text: "done\n\n  " } : c))
+  const out = reassemble(padded, msgs, partIdToCoreIds, "s1")
+  assert.equal(out[0]!.parts[0], originalPart, "unchanged body keeps the original part reference")
+  assert.equal(out[0]!.parts[0]!.state!.output, "done", "original output kept")
+})
+
+test("reassemble: kernel-truncated V1 tool error preserves error state", () => {
+  const msg = toolMsg("a2", "s1", "bash", "call_1", "unused")
+  msg.parts[0]!.state = { status: "error", input: { a: 1 }, error: "ORIGINAL_LONG_ERROR", title: "bash" }
+  const { cores, partIdToCoreIds } = octoToCoreMessages([msg])
+  assert.equal(cores.find((c) => c.id === "a2#x0")!.text, "Error: ORIGINAL_LONG_ERROR", "error projected for kernel")
+  const truncated = cores.map((c) => (c.id === "a2#x0" ? { ...c, text: "Error: TRUNCATED_ERROR" } : c))
+  const out = reassemble(truncated, [msg], partIdToCoreIds, "s1")
+  const state = out[0]!.parts[0]!.state!
+  assert.equal(state.status, "error", "error status preserved")
+  assert.equal(state.error, "TRUNCATED_ERROR", "adapter prefix removed before writing error")
+  assert.equal(state.output, undefined, "completed output field not introduced")
+  assert.deepEqual(state.input, { a: 1 }, "input preserved")
+  assert.equal(state.title, "bash", "title preserved")
+})
+
+test("reassemble: interrupted V1 tool output is projected and rewritten in metadata", () => {
+  const msg = toolMsg("a2", "s1", "bash", "call_1", "unused")
+  msg.parts[0]!.state = {
+    status: "error",
+    input: { a: 1 },
+    error: "Tool execution aborted",
+    metadata: { interrupted: true, output: "ORIGINAL_PARTIAL_OUTPUT", exitCode: 130 },
+    title: "bash",
+  }
+  const { cores, partIdToCoreIds } = octoToCoreMessages([msg])
+  assert.equal(cores.find((c) => c.id === "a2#x0")!.text, "ORIGINAL_PARTIAL_OUTPUT", "partial output projected for kernel")
+  const truncated = cores.map((c) => (c.id === "a2#x0" ? { ...c, text: "TRUNCATED_PARTIAL_OUTPUT" } : c))
+  const out = reassemble(truncated, [msg], partIdToCoreIds, "s1")
+  const state = out[0]!.parts[0]!.state!
+  assert.equal(state.status, "error", "interrupted status preserved")
+  assert.equal(state.error, "Tool execution aborted", "original interruption error preserved")
+  assert.equal(state.metadata?.interrupted, true, "interrupted marker preserved")
+  assert.equal(state.metadata?.output, "TRUNCATED_PARTIAL_OUTPUT", "truncated partial output written where V1 reads it")
+  assert.equal(state.metadata?.exitCode, 130, "other metadata preserved")
+})
+
 test("reassemble: assistant text parts carry no acp tag", () => {
   const core = createCore()
   const config = defaultConfig(200000)
