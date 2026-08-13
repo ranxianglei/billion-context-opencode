@@ -77,6 +77,15 @@ function safeStringify(value: unknown): string {
   }
 }
 
+function toolResultBody(state: OctoPart["state"]): string | undefined {
+  if (state?.status === "completed") {
+    return typeof state.output === "string" ? state.output : safeStringify(state.output)
+  }
+  if (state?.status !== "error") return undefined
+  const interruptedOutput = state.metadata?.interrupted === true ? state.metadata.output : undefined
+  return typeof interruptedOutput === "string" ? interruptedOutput : `Error: ${state.error ?? ""}`
+}
+
 export interface ConversionResult {
   cores: CoreMessage[]
   partIdToCoreIds: Map<string, string[]>
@@ -116,19 +125,13 @@ export function octoToCoreMessages(msgs: OctoMessage[]): ConversionResult {
         const ids = [callId]
         if (part.state?.status === "completed" || part.state?.status === "error") {
           const resultId = `${msg.info.id}#x${partIdx}`
-          const outText =
-            part.state.status === "completed"
-              ? typeof part.state.output === "string"
-                ? part.state.output
-                : safeStringify(part.state.output)
-              : `Error: ${part.state.error ?? ""}`
           cores.push({
             id: resultId,
             role: "tool",
             contentType: "tool-result",
             toolName,
             toolCallId,
-            text: outText,
+            text: toolResultBody(part.state) ?? "",
           })
           ids.push(resultId)
         }
@@ -249,7 +252,9 @@ export function reassemble(
         const callAlive = outCoreById.has(ids[0]!)
         const resultAlive = outCoreById.has(ids[1]!)
         if (!(callAlive && resultAlive)) continue
-        parts.push(p)
+        // Honor kernel body mutations (emergency truncation of large
+        // tool-results): otherwise reassembly would restore the full V1 body.
+        parts.push(applyToolBody(p, outCoreById.get(ids[1]!)))
         continue
       }
       const survived = ids.some((id) => outCoreById.has(id))
@@ -269,6 +274,27 @@ export function reassemble(
   }
 
   return result
+}
+
+function trimEnd(s: string): string {
+  return s.replace(/\s+$/, "")
+}
+
+export function applyToolBody(part: OctoPart, resultCore: CoreMessage | undefined): OctoPart {
+  const coreBody = resultCore?.text ?? ""
+  if (!coreBody) return part
+  const state = part.state
+  const originalText = toolResultBody(state)
+  if (!state || originalText === undefined) return part
+  if (trimEnd(coreBody) === trimEnd(originalText)) return part
+  if (state.status === "completed") {
+    return { ...part, state: { ...state, output: coreBody } }
+  }
+  if (state.metadata?.interrupted === true && typeof state.metadata.output === "string") {
+    return { ...part, state: { ...state, metadata: { ...state.metadata, output: coreBody } } }
+  }
+  const error = coreBody.startsWith("Error: ") ? coreBody.slice("Error: ".length) : coreBody
+  return { ...part, state: { ...state, error } }
 }
 
 export function makeNudgeMessage(
