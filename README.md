@@ -97,3 +97,10 @@ src/
 ## License
 
 MIT
+
+## Changelog
+
+### v0.1.0 — Monorepo + dual-shape single package (PR #7, #9)
+
+Initial npm-workspaces monorepo: `@bili/core` (private) + `billion-context-opencode` (published).
+One dual-shape entry loads on opencode V1 (callable) and V2 (`.id`/`.setup`) via `Object.assign`.
