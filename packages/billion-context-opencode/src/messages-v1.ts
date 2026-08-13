@@ -1,6 +1,10 @@
 import type { CoreMessage } from "acp-kernel"
 import { debug, warn } from "@bili/core"
 
+// Leading <acp ...>mNNNNN</acp> tag. XML only — the legacy [mNNNNN] form
+// never existed here and matching it would strip user text like "[m12345] ...".
+const REF_TAG = new RegExp("^(?:\\x3cacp\\s[^>]*\\x3em\\d{5}\\x3c/acp\\x3e)\\s?\\n?")
+
 export interface OctoPart {
   id: string
   type: string
@@ -133,6 +137,45 @@ function syntheticUserMessage(
   }
 }
 
+function trimEnd(s: string): string {
+  return s.replace(/\s+$/, "")
+}
+
+export function peelRefTagText(text: string): string {
+  return text.replace(REF_TAG, "")
+}
+
+export function rebuildBodyFromCore(part: OctoPart, coreBody: string, tag: string): OctoPart {
+  const body = coreBody.replace(/\s+$/, "")
+  return { ...part, text: body.length > 0 ? `${body}\n\n${tag}` : tag }
+}
+
+export function patchRefTag(part: OctoPart, core: CoreMessage, role: string): OctoPart {
+  const match = core.text ? core.text.match(REF_TAG) : null
+  const tag = match ? match[0] : null
+  if (!tag) return part
+  const tagCore = tag.replace(/\s+$/, "")
+  let bodyStart = tagCore.length
+  if (core.text!.charAt(bodyStart) === "\n") bodyStart += 1
+  const coreBody = core.text!.slice(bodyStart)
+  const originalBody = peelRefTagText(part.text ?? "")
+  const bodyChanged = trimEnd(coreBody) !== trimEnd(originalBody)
+  // Assistant messages remain untagged to avoid giving the model tag-shaped
+  // examples to echo. A kernel body rewrite is still authoritative, including
+  // a rewrite to an empty body; only the rendered tag is omitted.
+  if (role === "assistant") {
+    if (bodyChanged) return { ...part, text: coreBody }
+    return originalBody === part.text ? part : { ...part, text: originalBody }
+  }
+  // Honor kernel body mutations and future rewrites for user text, including
+  // an empty replacement, so the adapter never restores stale host content.
+  if (bodyChanged) {
+    return rebuildBodyFromCore(part, coreBody, tag)
+  }
+  const baseText = originalBody.replace(/\n*$/, "")
+  return { ...part, text: baseText.length > 0 ? `${baseText}\n\n${tag}` : tag }
+}
+
 export function reassemble(
   outputCores: CoreMessage[],
   inputMsgs: OctoMessage[],
@@ -183,7 +226,11 @@ export function reassemble(
       if (!survived) continue
       if (p.type === "text") {
         const tagged = outCoreById.get(ids[0]!)
-        parts.push({ ...p, text: tagged?.text ?? p.text })
+        if (tagged?.text) {
+          parts.push(patchRefTag(p, tagged, orig.info.role))
+        } else {
+          parts.push(p)
+        }
       } else {
         parts.push(p)
       }
