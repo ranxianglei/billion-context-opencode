@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { rm } from "node:fs/promises"
-import plugin from "./dist/index.js"
+import plugin from "./packages/billion-context-opencode/dist/index.js"
 
 await rm(process.env.HOME + "/.cache/opencode-bili-acp", { recursive: true, force: true })
 const sid = "smoke-" + Date.now()
@@ -19,7 +19,7 @@ function assistantMsg(id, text) {
   }
 }
 
-const hooks = await plugin({ project: { id: "t", name: "t" }, directory: "/tmp" }, {})
+const hooks = await plugin.server({ project: { id: "t", name: "t" }, directory: "/tmp" }, {})
 
 // --- system.transform: captures model, injects prompt ---
 const sysOut = { system: [] }

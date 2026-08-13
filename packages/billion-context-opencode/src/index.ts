@@ -29,6 +29,12 @@ import {
   makeNudgeMessage as makeNudgeMessageV2,
   type V2Message,
 } from "./messages-v2.js"
+import {
+  makeV2CompressTool,
+  makeV2DecompressTool,
+  makeV2SearchTool,
+  makeV2StatusTool,
+} from "./tools-v2.js"
 
 // ---------------------------------------------------------------------------
 // Shared adapter-config builder. Both the V1 entry (input, options) and the V2
@@ -170,7 +176,10 @@ async function biliAcpPluginV1(
 // { id, setup } (V2) satisfies BOTH loaders. See the dual-shape export below.
 // ===========================================================================
 
-const SYSTEM_MARKER = "BILI CONTEXT MANAGEMENT"
+// Must match the header line of @bili/core's SYSTEM_PROMPT (system-prompt.ts),
+// otherwise the upsert never matches and a duplicate system block is appended
+// on every dispatch.
+const SYSTEM_MARKER = "ACP TOOLS (billion-context)"
 
 interface ModelRef {
   id?: string
@@ -291,10 +300,10 @@ async function setupV2(ctx: PluginSetupContext): Promise<() => void> {
 
   await ctx.tool.transform((tools) => {
     const opts = { codemode: false, permission: "allow" }
-    tools.add({ ...makeCompressTool(runtime), options: opts })
-    tools.add({ ...makeDecompressTool(runtime), options: opts })
-    tools.add({ ...makeSearchTool(runtime), options: opts })
-    tools.add({ ...makeStatusTool(runtime), options: opts })
+    tools.add({ ...makeV2CompressTool(runtime), options: opts })
+    tools.add({ ...makeV2DecompressTool(runtime), options: opts })
+    tools.add({ ...makeV2SearchTool(runtime), options: opts })
+    tools.add({ ...makeV2StatusTool(runtime), options: opts })
   })
 
   await ctx.session.hook("context", async (event) => {
@@ -318,14 +327,21 @@ async function setupV2(ctx: PluginSetupContext): Promise<() => void> {
 // ---------------------------------------------------------------------------
 // Dual-shape default export.
 //
-// `Object.assign(fn, { id, setup })` returns `fn & { id, setup }` — the SAME
-// function object (still callable for V1) now carrying `.id` and `.setup`
-// (read by V2). One package, one entry, loads on both opencode major versions:
-//   - opencode V1: sees a function, calls it as the V1 plugin factory.
-//   - opencode V2: reads `.id` + calls `.setup(ctx)` (Plugin.define is identity).
+// The default MUST be a plain object, not a callable:
+//   - opencode V2 (`core/src/plugin/supervisor.ts`) validates the module with
+//     `Schema.Struct({ id, setup | effect })` and rejects functions:
+//     "Expected object, got async function". Excess keys are ignored, so a
+//     shared `server` key is allowed.
+//   - opencode V1 (`packages/opencode/src/plugin/shared.ts` `readV1Plugin`,
+//     detect mode) accepts a plain-object default with `id` + `server()` and
+//     calls `plugin.server(input, options)` — the V1 factory below.
+//
+// `Object.assign(fn, { id, setup })` looks clever but fails on V2 because the
+// default stays a function. Keep both entry points as methods on one object.
 // ---------------------------------------------------------------------------
 
-export default Object.assign(biliAcpPluginV1, {
+export default {
   id: "billion-context-opencode",
+  server: biliAcpPluginV1,
   setup: setupV2,
-})
+}
