@@ -30,6 +30,12 @@ import {
   makeNudgeMessage as makeNudgeMessageV2,
   type V2Message,
 } from "./messages-v2.js"
+import {
+  makeV2CompressTool,
+  makeV2DecompressTool,
+  makeV2SearchTool,
+  makeV2StatusTool,
+} from "./v2-tools.js"
 
 // ---------------------------------------------------------------------------
 // Shared adapter-config builder. Both the V1 entry (input, options) and the V2
@@ -188,7 +194,11 @@ async function biliAcpPluginV1(
 // { id, setup } (V2) satisfies BOTH loaders. See the dual-shape export below.
 // ===========================================================================
 
-const SYSTEM_MARKER = "BILI CONTEXT MANAGEMENT"
+/** Must match the first line of `@bili/core`'s SYSTEM_PROMPT so the V2 context
+ *  hook's upsert (replace vs. append) actually finds the existing prompt and
+ *  does not append a duplicate on every dispatch. Exported for a regression
+ *  test that guards this invariant against SYSTEM_PROMPT edits. */
+export const SYSTEM_MARKER = "ACP TOOLS (billion-context)"
 
 interface ModelRef {
   id?: string
@@ -309,10 +319,10 @@ async function setupV2(ctx: PluginSetupContext): Promise<() => void> {
 
   await ctx.tool.transform((tools) => {
     const opts = { codemode: false, permission: "allow" }
-    tools.add({ ...makeCompressTool(runtime), options: opts })
-    tools.add({ ...makeDecompressTool(runtime), options: opts })
-    tools.add({ ...makeSearchTool(runtime), options: opts })
-    tools.add({ ...makeStatusTool(runtime), options: opts })
+    tools.add({ ...makeV2CompressTool(runtime), options: opts })
+    tools.add({ ...makeV2DecompressTool(runtime), options: opts })
+    tools.add({ ...makeV2SearchTool(runtime), options: opts })
+    tools.add({ ...makeV2StatusTool(runtime), options: opts })
   })
 
   await ctx.session.hook("context", async (event) => {
