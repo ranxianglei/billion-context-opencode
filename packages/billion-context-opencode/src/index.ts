@@ -23,6 +23,7 @@ import {
   deriveSessionId,
   type OctoMessage,
 } from "./messages-v1.js"
+import { selectV1TokenCount } from "./usage-v1.js"
 import {
   v2ToCoreMessages,
   reassemble as reassembleV2,
@@ -87,9 +88,22 @@ async function runPipelineV1(
   const state: CompressionState = await runtime.stateFor(sessionID)
 
   const coveredIds = collectCoveredMessageIds(state)
-  const tokenCount = estimateTokens(cores, coveredIds)
   const resolved = runtime.configFor(runtime.getModelLimit(sessionID))
-  debug("transform-in", { sid: sessionID, msgs: msgs.length, cores: cores.length, tokens: tokenCount, limit: resolved.modelContextLimit, blocks: state.blocks.length })
+  const estimatedTokens = estimateTokens(cores, coveredIds)
+  const usage = selectV1TokenCount(msgs, state, estimatedTokens)
+  const { tokenCount } = usage
+  debug("transform-in", {
+    sid: sessionID,
+    msgs: msgs.length,
+    cores: cores.length,
+    estimatedTokens,
+    reportedTokens: usage.reported?.total,
+    tokenCount,
+    tokenSource: usage.source,
+    usageFallbackReason: usage.fallbackReason,
+    limit: resolved.modelContextLimit,
+    blocks: state.blocks.length,
+  })
 
   const turn = runtime.core.processTurn({
     messages: cores,
@@ -100,7 +114,7 @@ async function runPipelineV1(
   })
 
   runtime.setCores(sessionID, cores)
-  runtime.cacheTurn(sessionID, turn.state, cores, tokenCount, turn)
+  runtime.cacheTurn(sessionID, turn.state, cores, tokenCount, turn, resolved)
   await runtime.save(turn.state, sessionID)
 
   const reassembled = reassembleV1(turn.messages, msgs, partIdToCoreIds, sessionID)
@@ -236,7 +250,7 @@ async function runPipelineV2(
   })
 
   runtime.setCores(sessionID, cores)
-  runtime.cacheTurn(sessionID, turn.state, cores, tokenCount, turn)
+  runtime.cacheTurn(sessionID, turn.state, cores, tokenCount, turn, resolved)
   await runtime.save(turn.state, sessionID)
 
   const reassembled = reassembleV2(turn.messages, msgs, conversion, sessionID)
