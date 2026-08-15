@@ -1,6 +1,6 @@
 {
   "name": "billion-context-opencode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ACP (Active Context Pruning) compression adapter for opencode — one package that loads on both opencode V1 (experimental.chat.* hooks) and V2 (Plugin.define). Model-driven context management via acp-kernel: bili_compress / bili_decompress / bili_search / bili_status.",
   "type": "module",
   "main": "./dist/index.js",
