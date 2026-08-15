@@ -100,6 +100,16 @@ MIT
 
 ## Changelog
 
+### v0.1.1 — First accumulation release (PR #20)
+
+Ships the merged master work since v0.1.0: ref-tag placement normalization (#12),
+truncated tool-result body preservation (#13), system-prompt alignment with the
+PI rules (#14), reported-usage preference for nudge calculations (#15), smoke
+harness repair (#16), v2 tools registered with the AI-SDK shape + idempotent
+system prompt (#18), and status compressible-range filtering via
+`billion-context-kit` viableRanges with the kit pinned to npm (#19).
+acp-kernel remains 0.0.19 (upgrade deferred).
+
 ### v0.1.0 — Monorepo + dual-shape single package (PR #7, #9)
 
 Initial npm-workspaces monorepo: `@bili/core` (private) + `billion-context-opencode` (published).
