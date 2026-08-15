@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { buildStatusReport, defaultCountTokens, formatRanges } from "acp-kernel"
+import { viableRanges } from "billion-context-kit"
 import type { AcpRuntime } from "./runtime.js"
 import type { ToolDef } from "./compress-tool.js"
 import { estimateTokens, collectCoveredMessageIds } from "./tokens.js"
@@ -53,7 +54,10 @@ async function handleStatus(args: Record<string, unknown>, runtime: AcpRuntime, 
   if (args.scope) return base
 
   const nudge = turn.nudge
-  const ranges = nudge?.compressibleRanges ?? []
+  // Kit filter: fragmented ranges (<200 tokens) cannot carry a meaningful
+  // summary and would fail the kernel's atomic batch validation — same guard
+  // as the omp/pi adapters (billion-context-kit viableRanges).
+  const ranges = viableRanges(nudge?.compressibleRanges ?? [])
   const protectedRanges = nudge?.protectedRanges ?? []
 
   const extra: string[] = []
