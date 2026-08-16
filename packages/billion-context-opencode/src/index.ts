@@ -253,7 +253,9 @@ async function runPipelineV2(
   const coveredIds = collectCoveredMessageIds(state)
   const tokenCount = estimateTokens(cores, coveredIds)
   const resolved = runtime.configFor(runtime.getModelLimit(sessionID))
-  debug("transform-in", { sid: sessionID, msgs: msgs.length, cores: cores.length, tokens: tokenCount, limit: resolved.modelContextLimit, blocks: state.blocks.length })
+  // Model identity on every transform line: weak-model compress-rejection
+  // loops must be attributable from logs alone (omp #78 family).
+  debug("transform-in", { sid: sessionID, model: event.model ? `${event.model.providerID}/${event.model.id}` : null, msgs: msgs.length, cores: cores.length, tokens: tokenCount, limit: resolved.modelContextLimit, blocks: state.blocks.length })
 
   const turn = runtime.core.processTurn({
     messages: cores,
